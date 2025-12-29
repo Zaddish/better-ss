@@ -1,0 +1,7 @@
+build/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*_vs.h
+*_ps.h
