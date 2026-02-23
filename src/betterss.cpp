@@ -587,7 +587,7 @@ static int RenderOverlay(betterss_state *State) {
     Viewport.MaxDepth = 1.0f;
     R->Context->RSSetViewports(1, &Viewport);
     
-    RenderAnnotationLines(R, State->Selection, 0, 0, R->Width, R->Height);
+    RenderAnnotations(R, State->Selection, 0, 0, R->Width, R->Height);
 
     return RendererPresent(R);
 }
@@ -647,7 +647,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
         } break;
 
         case WM_LBUTTONDOWN: {
-            if(State->IsCapturing && !State->Selection->IsAnnotating) {
+            if(State->IsCapturing && !State->Selection->IsAnnotating && !State->Selection->IsCensoring) {
                 int X = (short)LOWORD(LParam);
                 int Y = (short)HIWORD(LParam);
                 SelectionBegin(State->Selection, X, Y);
@@ -662,6 +662,10 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                 if(State->Selection->IsDragging) {
                     SelectionUpdate(State->Selection, X, Y);
                     UpdateOverlayShader(State);
+                    RefreshOverlay(State);
+                }
+                else if(State->Selection->IsCensoring) {
+                    CensorUpdate(State->Selection, X, Y);
                     RefreshOverlay(State);
                 }
                 else if(State->Selection->IsAnnotating) {
@@ -709,15 +713,27 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
             if(State->IsCapturing) {
                 int X = (short)LOWORD(LParam);
                 int Y = (short)HIWORD(LParam);
-                AnnotationBegin(State->Selection, &State->CaptureArena, X, Y);
+                if(GetKeyState(VK_SHIFT) & 0x8000) {
+                    CensorBegin(State->Selection, X, Y);
+                }
+                else {
+                    AnnotationBegin(State->Selection, &State->CaptureArena, X, Y);
+                }
                 SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32516)));
             }
         } break;
 
         case WM_RBUTTONUP: {
-            if(State->IsCapturing && State->Selection->IsAnnotating) {
-                AnnotationEnd(State->Selection);
-                SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32515)));
+            if(State->IsCapturing) {
+                if(State->Selection->IsCensoring) {
+                    CensorEnd(State->Selection);
+                    RefreshOverlay(State);
+                    SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32515)));
+                }
+                else if(State->Selection->IsAnnotating) {
+                    AnnotationEnd(State->Selection);
+                    SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32515)));
+                }
             }
         } break;
 
@@ -730,7 +746,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 
         case WM_SETCURSOR: {
             if(State->IsCapturing) {
-                if(State->Selection->IsAnnotating) {
+                if(State->Selection->IsAnnotating || State->Selection->IsCensoring) {
                     SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32516)));
                 }
                 else {

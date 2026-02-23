@@ -224,17 +224,35 @@ static void InitializeLineRenderer(betterss_renderer *Renderer,
         Renderer->LineVertexBufferCapacity * sizeof(line_vertex), D3D11_BIND_VERTEX_BUFFER);
 }
 
-static void RenderAnnotationLines(betterss_renderer *R, selection_state *Selection, 
-                                   int OffsetX, int OffsetY, int TargetWidth, int TargetHeight) {
+static void EmitRectQuad(line_vertex *Vertices, int *VertexIndex,
+                         float Left, float Top, float Right, float Bottom) {
+    int VI = *VertexIndex;
+    Vertices[VI].Position[0] = Left;  Vertices[VI].Position[1] = Top;    VI++;
+    Vertices[VI].Position[0] = Right; Vertices[VI].Position[1] = Top;    VI++;
+    Vertices[VI].Position[0] = Left;  Vertices[VI].Position[1] = Bottom; VI++;
+    Vertices[VI].Position[0] = Right; Vertices[VI].Position[1] = Top;    VI++;
+    Vertices[VI].Position[0] = Right; Vertices[VI].Position[1] = Bottom; VI++;
+    Vertices[VI].Position[0] = Left;  Vertices[VI].Position[1] = Bottom; VI++;
+    *VertexIndex = VI;
+}
+
+static void RenderAnnotations(betterss_renderer *R, selection_state *Selection, 
+                               int OffsetX, int OffsetY, int TargetWidth, int TargetHeight) {
     if(!R->LineVertexShader || !R->LinePixelShader || !R->LineInputLayout) return;
-    if(!Selection || Selection->LineCount == 0 || !Selection->Lines) return;
+    if(!Selection || !Selection->Annotations) return;
     
-    // each line segment needs 6 verts
+    if(Selection->AnnotationCount == 0) return;
+    
     int TotalVertexCount = 0;
-    for(int i = 0; i < Selection->LineCount; i++) {
-        annotation_line *Line = &Selection->Lines[i];
-        if(Line->Points && Line->PointCount > 1) {
-            TotalVertexCount += (Line->PointCount - 1) * 6;
+    for(int i = 0; i < Selection->AnnotationCount; i++) {
+        annotation_entry *Entry = &Selection->Annotations[i];
+        if(Entry->Type == ANNOTATION_LINE) {
+            if(Entry->Points && Entry->PointCount > 1) {
+                TotalVertexCount += (Entry->PointCount - 1) * 6;
+            }
+        }
+        else if(Entry->Type == ANNOTATION_RECT) {
+            TotalVertexCount += 6;
         }
     }
     
@@ -260,50 +278,54 @@ static void RenderAnnotationLines(betterss_renderer *R, selection_state *Selecti
         line_vertex *Vertices = (line_vertex *)Mapped.pData;
         int VertexIndex = 0;
         
-        for(int i = 0; i < Selection->LineCount; i++) {
-            annotation_line *Line = &Selection->Lines[i];
-            if(!Line->Points || Line->PointCount <= 1) continue;
-            for(int j = 0; j < Line->PointCount - 1; j++) {
-                float X0 = (float)(Line->Points[j].X + OffsetX);
-                float Y0 = (float)(Line->Points[j].Y + OffsetY);
-                float X1 = (float)(Line->Points[j + 1].X + OffsetX);
-                float Y1 = (float)(Line->Points[j + 1].Y + OffsetY);
-                
-                // calculate perpendicular vector for line thickness
-                float DX = X1 - X0;
-                float DY = Y1 - Y0;
-                float Len = FastSqrt(DX * DX + DY * DY);
-                if(Len < 0.001f) continue;
-                
-                float PerpX = -DY / Len * (LineWidth * 0.5f);
-                float PerpY = DX / Len * (LineWidth * 0.5f);
-                
-                // generate quad verts (2 triangles)
-                // tri 1
-                Vertices[VertexIndex].Position[0] = X0 + PerpX;
-                Vertices[VertexIndex].Position[1] = Y0 + PerpY;
-                VertexIndex++;
-                
-                Vertices[VertexIndex].Position[0] = X0 - PerpX;
-                Vertices[VertexIndex].Position[1] = Y0 - PerpY;
-                VertexIndex++;
-                
-                Vertices[VertexIndex].Position[0] = X1 + PerpX;
-                Vertices[VertexIndex].Position[1] = Y1 + PerpY;
-                VertexIndex++;
-                
-                // tri 2
-                Vertices[VertexIndex].Position[0] = X1 + PerpX;
-                Vertices[VertexIndex].Position[1] = Y1 + PerpY;
-                VertexIndex++;
-                
-                Vertices[VertexIndex].Position[0] = X0 - PerpX;
-                Vertices[VertexIndex].Position[1] = Y0 - PerpY;
-                VertexIndex++;
-                
-                Vertices[VertexIndex].Position[0] = X1 - PerpX;
-                Vertices[VertexIndex].Position[1] = Y1 - PerpY;
-                VertexIndex++;
+        for(int i = 0; i < Selection->AnnotationCount; i++) {
+            annotation_entry *Entry = &Selection->Annotations[i];
+            
+            if(Entry->Type == ANNOTATION_LINE) {
+                if(!Entry->Points || Entry->PointCount <= 1) continue;
+                for(int j = 0; j < Entry->PointCount - 1; j++) {
+                    float X0 = (float)(Entry->Points[j].X + OffsetX);
+                    float Y0 = (float)(Entry->Points[j].Y + OffsetY);
+                    float X1 = (float)(Entry->Points[j + 1].X + OffsetX);
+                    float Y1 = (float)(Entry->Points[j + 1].Y + OffsetY);
+                    
+                    float DX = X1 - X0;
+                    float DY = Y1 - Y0;
+                    float Len = FastSqrt(DX * DX + DY * DY);
+                    if(Len < 0.001f) continue;
+                    
+                    float PerpX = -DY / Len * (LineWidth * 0.5f);
+                    float PerpY = DX / Len * (LineWidth * 0.5f);
+                    
+                    Vertices[VertexIndex].Position[0] = X0 + PerpX;
+                    Vertices[VertexIndex].Position[1] = Y0 + PerpY;
+                    VertexIndex++;
+                    Vertices[VertexIndex].Position[0] = X0 - PerpX;
+                    Vertices[VertexIndex].Position[1] = Y0 - PerpY;
+                    VertexIndex++;
+                    Vertices[VertexIndex].Position[0] = X1 + PerpX;
+                    Vertices[VertexIndex].Position[1] = Y1 + PerpY;
+                    VertexIndex++;
+                    
+                    Vertices[VertexIndex].Position[0] = X1 + PerpX;
+                    Vertices[VertexIndex].Position[1] = Y1 + PerpY;
+                    VertexIndex++;
+                    Vertices[VertexIndex].Position[0] = X0 - PerpX;
+                    Vertices[VertexIndex].Position[1] = Y0 - PerpY;
+                    VertexIndex++;
+                    Vertices[VertexIndex].Position[0] = X1 - PerpX;
+                    Vertices[VertexIndex].Position[1] = Y1 - PerpY;
+                    VertexIndex++;
+                }
+            }
+            else if(Entry->Type == ANNOTATION_RECT) {
+                float Left = (float)(Entry->X0 + OffsetX);
+                float Top = (float)(Entry->Y0 + OffsetY);
+                float Right = (float)(Entry->X1 + OffsetX);
+                float Bottom = (float)(Entry->Y1 + OffsetY);
+                if(Left > Right) { float T = Left; Left = Right; Right = T; }
+                if(Top > Bottom) { float T = Top; Top = Bottom; Bottom = T; }
+                EmitRectQuad(Vertices, &VertexIndex, Left, Top, Right, Bottom);
             }
         }
         

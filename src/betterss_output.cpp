@@ -238,7 +238,7 @@ static resolved_pixels ResolveSelectionPixels(betterss_renderer *R, capture_stat
     SrcBox.bottom = (UINT)(LocalTop + SelHeight);
     SrcBox.back = 1;
 
-    int HasAnnotations = S && S->LineCount > 0;
+    int HasAnnotations = S && S->AnnotationCount > 0;
 
     if(HasAnnotations) {
         ID3D11Texture2D *RenderTexture = GetCachedTexture(R, &R->CachedRender, (uint32_t)SelWidth, (uint32_t)SelHeight,
@@ -255,7 +255,7 @@ static resolved_pixels ResolveSelectionPixels(betterss_renderer *R, capture_stat
         Viewport.MaxDepth = 1.0f;
         R->Context->RSSetViewports(1, &Viewport);
 
-        RenderAnnotationLines(R, S, -Selection.left, -Selection.top, SelWidth, SelHeight);
+        RenderAnnotations(R, S, -Selection.left, -Selection.top, SelWidth, SelHeight);
 
         ID3D11RenderTargetView *NullRTV = 0;
         R->Context->OMSetRenderTargets(1, &NullRTV, 0);

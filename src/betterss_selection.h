@@ -2,7 +2,7 @@
 
 #pragma once
 
-#define MAX_ANNOTATION_LINES 128
+#define MAX_ANNOTATIONS 128
 #define MAX_POINTS_PER_LINE 2048
 
 struct line_point
@@ -10,11 +10,19 @@ struct line_point
     int X, Y;
 };
 
-struct annotation_line
+enum annotation_type 
+{ 
+    ANNOTATION_LINE = 0,
+    ANNOTATION_RECT = 1 
+};
+
+struct annotation_entry
 {
+    annotation_type Type;
     line_point *Points;
     int PointCount;
     int PointCapacity;
+    int X0, Y0, X1, Y1;
 };
 
 struct selection_state
@@ -27,11 +35,15 @@ struct selection_state
     int IsDragging;
     
     // Annotations
-    annotation_line *Lines;
-    int LineCount;
-    int MaxLines;
+    annotation_entry *Annotations;
+    int AnnotationCount;
+    int MaxAnnotations;
     int IsAnnotating;
-    int CurrentLineIndex;
+    int CurrentAnnotationIndex;
+
+    int IsCensoring;
+    int CensorStartX;
+    int CensorStartY;
 };
 
 static void SelectionReset(selection_state *Selection);
@@ -45,3 +57,7 @@ static void AnnotationBegin(selection_state *Selection, memory_arena *Arena, int
 static void AnnotationUpdate(selection_state *Selection, int X, int Y);
 static void AnnotationEnd(selection_state *Selection);
 static void AnnotationUndo(selection_state *Selection);
+
+static void CensorBegin(selection_state *Selection, int X, int Y);
+static void CensorUpdate(selection_state *Selection, int X, int Y);
+static void CensorEnd(selection_state *Selection);

@@ -44,43 +44,44 @@ static RECT SelectionGetRect(selection_state *Selection) {
 }
 
 static void AnnotationInit(selection_state *Selection, memory_arena *Arena) {
-    Selection->Lines = (annotation_line *)ArenaAlloc(Arena, 
-        MAX_ANNOTATION_LINES * sizeof(annotation_line));
-    Selection->MaxLines = Selection->Lines ? MAX_ANNOTATION_LINES : 0;
+    Selection->Annotations = (annotation_entry *)ArenaAlloc(Arena, 
+        MAX_ANNOTATIONS * sizeof(annotation_entry));
+    Selection->MaxAnnotations = Selection->Annotations ? MAX_ANNOTATIONS : 0;
 }
 
-// 0 is valid (first line)
+// 0 is valid (first annotation)
 // invalid state is determined by bounds checking
 static void AnnotationBegin(selection_state *Selection, memory_arena *Arena, int X, int Y) {
-    if(!Selection->Lines) return;
-    if(Selection->LineCount >= Selection->MaxLines) return;
+    if(!Selection->Annotations) return;
+    if(Selection->AnnotationCount >= Selection->MaxAnnotations) return;
     
-    annotation_line *Line = &Selection->Lines[Selection->LineCount];
+    annotation_entry *Entry = &Selection->Annotations[Selection->AnnotationCount];
     
-    Line->Points = (line_point *)ArenaAlloc(Arena, 
+    Entry->Points = (line_point *)ArenaAlloc(Arena, 
         MAX_POINTS_PER_LINE * sizeof(line_point));
     
-    if(Line->Points) {
-        Line->PointCapacity = MAX_POINTS_PER_LINE;
-        Line->PointCount = 1;
-        Line->Points[0].X = X;
-        Line->Points[0].Y = Y;
+    if(Entry->Points) {
+        Entry->Type = ANNOTATION_LINE;
+        Entry->PointCapacity = MAX_POINTS_PER_LINE;
+        Entry->PointCount = 1;
+        Entry->Points[0].X = X;
+        Entry->Points[0].Y = Y;
         
-        Selection->CurrentLineIndex = Selection->LineCount;  // 0-based: first line = 0
-        Selection->LineCount++;
+        Selection->CurrentAnnotationIndex = Selection->AnnotationCount;
+        Selection->AnnotationCount++;
         Selection->IsAnnotating = 1;
     }
 }
 
 static void AnnotationUpdate(selection_state *Selection, int X, int Y) {
     if(!Selection->IsAnnotating) return;
-    if(Selection->CurrentLineIndex >= Selection->LineCount) return;
+    if(Selection->CurrentAnnotationIndex >= Selection->AnnotationCount) return;
     
-    annotation_line *Line = &Selection->Lines[Selection->CurrentLineIndex];
-    if(!Line->Points) return;
+    annotation_entry *Entry = &Selection->Annotations[Selection->CurrentAnnotationIndex];
+    if(!Entry->Points) return;
     
-    if(Line->PointCount > 0) {
-        line_point *LastPoint = &Line->Points[Line->PointCount - 1];
+    if(Entry->PointCount > 0) {
+        line_point *LastPoint = &Entry->Points[Entry->PointCount - 1];
         int DX = X - LastPoint->X;
         int DY = Y - LastPoint->Y;
         int DistSq = DX * DX + DY * DY;
@@ -89,25 +90,57 @@ static void AnnotationUpdate(selection_state *Selection, int X, int Y) {
     }
     
     //TODO(zaddish): let the user know we hit capacity, or remove the LRU line
-    if(Line->PointCount >= Line->PointCapacity) return;
+    if(Entry->PointCount >= Entry->PointCapacity) return;
     
-    Line->Points[Line->PointCount].X = X;
-    Line->Points[Line->PointCount].Y = Y;
-    Line->PointCount++;
+    Entry->Points[Entry->PointCount].X = X;
+    Entry->Points[Entry->PointCount].Y = Y;
+    Entry->PointCount++;
 }
 
 static void AnnotationEnd(selection_state *Selection) {
     Selection->IsAnnotating = 0;
-    Selection->CurrentLineIndex = 0;
+    Selection->CurrentAnnotationIndex = 0;
 }
 
 static void AnnotationUndo(selection_state *Selection) {
-    if(Selection->LineCount > 0) {
-        Selection->LineCount--;
-        if(Selection->CurrentLineIndex >= Selection->LineCount) {
-            Selection->CurrentLineIndex = 0;
+    if(Selection->AnnotationCount > 0) {
+        Selection->AnnotationCount--;
+        if(Selection->CurrentAnnotationIndex >= Selection->AnnotationCount) {
+            Selection->CurrentAnnotationIndex = 0;
         }
         // note(zaddish): memory is not freed yet, it stays in the arena, and will be reset when capture ends
     }
 }
 
+static void CensorBegin(selection_state *Selection, int X, int Y) {
+    if(!Selection->Annotations) return;
+    if(Selection->AnnotationCount >= Selection->MaxAnnotations) return;
+    
+    Selection->IsCensoring = 1;
+    Selection->CensorStartX = X;
+    Selection->CensorStartY = Y;
+    
+    annotation_entry *Entry = &Selection->Annotations[Selection->AnnotationCount];
+    Entry->Type = ANNOTATION_RECT;
+    Entry->X0 = X;
+    Entry->Y0 = Y;
+    Entry->X1 = X;
+    Entry->Y1 = Y;
+    
+    Selection->CurrentAnnotationIndex = Selection->AnnotationCount;
+    Selection->AnnotationCount++;
+}
+
+static void CensorUpdate(selection_state *Selection, int X, int Y) {
+    if(!Selection->IsCensoring) return;
+    if(Selection->CurrentAnnotationIndex >= Selection->AnnotationCount) return;
+    
+    annotation_entry *Entry = &Selection->Annotations[Selection->CurrentAnnotationIndex];
+    Entry->X1 = X;
+    Entry->Y1 = Y;
+}
+
+static void CensorEnd(selection_state *Selection) {
+    Selection->IsCensoring = 0;
+    Selection->CurrentAnnotationIndex = 0;
+}
