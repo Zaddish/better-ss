@@ -1,4 +1,6 @@
 build/
+.vscode/
+compile_flags.txt
 *.exe
 *.obj
 *.pdb

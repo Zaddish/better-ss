@@ -60,3 +60,5 @@ static betterss_renderer AcquireRenderer(HWND Window);
 static void ReleaseRenderer(betterss_renderer *Renderer);
 static void RendererResize(betterss_renderer *Renderer, uint32_t Width, uint32_t Height);
 static int RendererPresent(betterss_renderer *Renderer);
+static void RenderAnnotationLines(betterss_renderer *R, selection_state *Selection,
+                                   int OffsetX, int OffsetY, int TargetWidth, int TargetHeight);
