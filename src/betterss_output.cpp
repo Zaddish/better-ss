@@ -344,11 +344,17 @@ static int CopySelectionToClipboard(betterss_renderer *R, capture_state *C, RECT
     
     RenderAnnotationLines(R, S, -Selection.left, -Selection.top, SelWidth, SelHeight);
 
-    // Copy to staging
+    ID3D11RenderTargetView *NullRTV = 0;
+    R->Context->OMSetRenderTargets(1, &NullRTV, 0);
+
     ID3D11Texture2D *Staging = GetCachedStagingTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
     if(!Staging) return(0);
 
-    R->Context->CopyResource(Staging, RenderTexture);
+    D3D11_BOX RenderBox = {};
+    RenderBox.right = (UINT)SelWidth;
+    RenderBox.bottom = (UINT)SelHeight;
+    RenderBox.back = 1;
+    R->Context->CopySubresourceRegion(Staging, 0, 0, 0, 0, RenderTexture, 0, &RenderBox);
 
     D3D11_MAPPED_SUBRESOURCE Mapped;
     HRESULT hr = R->Context->Map(Staging, 0, D3D11_MAP_READ, 0, &Mapped);
@@ -440,10 +446,18 @@ static int SaveSelectionToFile(betterss_renderer *R, capture_state *C, RECT Sele
     R->Context->RSSetViewports(1, &Viewport);
     
     RenderAnnotationLines(R, S, -Selection.left, -Selection.top, SelWidth, SelHeight);
+
+    ID3D11RenderTargetView *NullRTV = 0;
+    R->Context->OMSetRenderTargets(1, &NullRTV, 0);
+
     ID3D11Texture2D *Staging = GetCachedStagingTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
     if(!Staging) return(0);
 
-    R->Context->CopyResource(Staging, RenderTexture);
+    D3D11_BOX RenderBox = {};
+    RenderBox.right = (UINT)SelWidth;
+    RenderBox.bottom = (UINT)SelHeight;
+    RenderBox.back = 1;
+    R->Context->CopySubresourceRegion(Staging, 0, 0, 0, 0, RenderTexture, 0, &RenderBox);
 
     D3D11_MAPPED_SUBRESOURCE Mapped;
     HRESULT hr = R->Context->Map(Staging, 0, D3D11_MAP_READ, 0, &Mapped);
