@@ -3,6 +3,7 @@
 
 #include <wincodec.h>
 #include <objbase.h>
+#include <tmmintrin.h>
 
 static ID3D11Texture2D *GetCachedStagingTexture(betterss_renderer *R, uint32_t Width, uint32_t Height) {
     if(R->CachedStagingTexture && 
@@ -128,13 +129,29 @@ static int CopyPixelsToClipboard(void *Pixels, uint32_t Width, uint32_t Height, 
     uint8_t *Src = (uint8_t *)Pixels;
     uint8_t *Dst = (uint8_t *)MemPtr + HeaderSize;
 
+    __m128i ShufMask = _mm_setr_epi8(0,1,2,4, 5,6,8,9, 10,12,13,14, -1,-1,-1,-1);
+    uint32_t SimdWidth = Width & ~15u;
+
     for(uint32_t y = 0; y < Height; y++) {
-        uint32_t SrcY = y;
-        uint32_t DstY = Height - 1 - y;
-        for(uint32_t x = 0; x < Width; x++) {
-            Dst[DstY * RowSize + x * 3 + 0] = Src[SrcY * Pitch + x * 4 + 0];
-            Dst[DstY * RowSize + x * 3 + 1] = Src[SrcY * Pitch + x * 4 + 1];
-            Dst[DstY * RowSize + x * 3 + 2] = Src[SrcY * Pitch + x * 4 + 2];
+        uint8_t *SrcRow = Src + y * Pitch;
+        uint8_t *DstRow = Dst + (Height - 1 - y) * RowSize;
+
+        uint32_t x = 0;
+        for(; x < SimdWidth; x += 16) {
+            __m128i s0 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i *)(SrcRow + x * 4 +  0)), ShufMask);
+            __m128i s1 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i *)(SrcRow + x * 4 + 16)), ShufMask);
+            __m128i s2 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i *)(SrcRow + x * 4 + 32)), ShufMask);
+            __m128i s3 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i *)(SrcRow + x * 4 + 48)), ShufMask);
+
+            _mm_storeu_si128((__m128i *)(DstRow + x * 3 +  0), _mm_or_si128(s0, _mm_slli_si128(s1, 12)));
+            _mm_storeu_si128((__m128i *)(DstRow + x * 3 + 16), _mm_or_si128(_mm_srli_si128(s1, 4), _mm_slli_si128(s2, 8)));
+            _mm_storeu_si128((__m128i *)(DstRow + x * 3 + 32), _mm_or_si128(_mm_srli_si128(s2, 8), _mm_slli_si128(s3, 4)));
+        }
+
+        for(; x < Width; x++) {
+            DstRow[x * 3 + 0] = SrcRow[x * 4 + 0];
+            DstRow[x * 3 + 1] = SrcRow[x * 4 + 1];
+            DstRow[x * 3 + 2] = SrcRow[x * 4 + 2];
         }
     }
 
