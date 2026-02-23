@@ -61,8 +61,8 @@ static void wcscat_internal(wchar_t *Dest, size_t DestSize, const wchar_t *Src) 
 }
 
 static void wcscpy_internal(wchar_t *Dest, size_t DestSize, const wchar_t *Src) {
-    while(*Src && DestSize > 1) { *Dest++ = *Src++; DestSize--; }
     *Dest = 0;
+    wcscat_internal(Dest, DestSize, Src);
 }
 
 static void UpdateOverlayShader(betterss_state *State);
@@ -261,10 +261,10 @@ static void UpdateTrayTip(betterss_state *State) {
     wchar_t Tip[256] = L"BetterSS\nCapture: ";
     wchar_t HotkeyStr[64];
     GetHotkeyString(&State->CaptureHotkey, HotkeyStr, 64);
-    wcscat_internal(Tip, 128, HotkeyStr);
-    wcscat_internal(Tip, 128, L"\nSave: ");
+    wcscat_internal(Tip, 256, HotkeyStr);
+    wcscat_internal(Tip, 256, L"\nSave: ");
     GetHotkeyString(&State->SaveHotkey, HotkeyStr, 64);
-    wcscat_internal(Tip, 128, HotkeyStr);
+    wcscat_internal(Tip, 256, HotkeyStr);
     wcscpy_internal(State->TrayIcon.szTip, 128, Tip);
 }
 
@@ -283,21 +283,22 @@ static void RemoveTrayIcon(betterss_state *State) {
     Shell_NotifyIconW(NIM_DELETE, &State->TrayIcon);
 }
 
+static void AppendHotkeyMenuItem(HMENU Menu, UINT Id, const wchar_t *Label, hotkey_binding *H) {
+    wchar_t Item[128];
+    wcscpy_internal(Item, 128, Label);
+    wcscat_internal(Item, 128, L" (");
+    wchar_t HotkeyStr[64];
+    GetHotkeyString(H, HotkeyStr, 64);
+    wcscat_internal(Item, 128, HotkeyStr);
+    wcscat_internal(Item, 128, L")...");
+    AppendMenuW(Menu, MF_STRING, Id, Item);
+}
+
 static void ShowTrayMenu(betterss_state *State) {
     HMENU Menu = CreatePopupMenu();
     
-    wchar_t HotkeyStr[64];
-    GetHotkeyString(&State->CaptureHotkey, HotkeyStr, 64);
-    wchar_t MenuItem[128] = L"Capture Hotkey (";
-    wcscat_internal(MenuItem, 128, HotkeyStr);
-    wcscat_internal(MenuItem, 128, L")...");
-    AppendMenuW(Menu, MF_STRING, IDM_CHANGEHOTKEY, MenuItem);
-    
-    GetHotkeyString(&State->SaveHotkey, HotkeyStr, 64);
-    wcscpy_internal(MenuItem, 128, L"Save Hotkey (");
-    wcscat_internal(MenuItem, 128, HotkeyStr);
-    wcscat_internal(MenuItem, 128, L")...");
-    AppendMenuW(Menu, MF_STRING, IDM_CHANGESAVEHOTKEY, MenuItem);
+    AppendHotkeyMenuItem(Menu, IDM_CHANGEHOTKEY, L"Capture Hotkey", &State->CaptureHotkey);
+    AppendHotkeyMenuItem(Menu, IDM_CHANGESAVEHOTKEY, L"Save Hotkey", &State->SaveHotkey);
     
     int StartupChecked = IsStartupEnabled();
     AppendMenuW(Menu, MF_STRING | (StartupChecked ? MF_CHECKED : 0), IDM_STARTUP, L"Start with Windows");
@@ -415,22 +416,21 @@ static void CloakWindow(HWND Window, BOOL Cloak) {
     DwmSetWindowAttribute(Window, DWMWA_CLOAK, &Cloak, sizeof(Cloak));
 }
 
+static void InitializeShaders(betterss_renderer *R) {
+    R->Device->CreateVertexShader(
+        BetterSSVSBytes, sizeof(BetterSSVSBytes), 0, &R->VertexShader);
+    R->Device->CreatePixelShader(
+        BetterSSPSBytes, sizeof(BetterSSPSBytes), 0, &R->OverlayShader);
+    InitializeLineRenderer(R, 
+        BetterSSLineVSBytes, sizeof(BetterSSLineVSBytes),
+        BetterSSLinePSBytes, sizeof(BetterSSLinePSBytes));
+}
+
 static void ShowOverlay(betterss_state *State) {
-    // maybe we can re acquire the renderer if lost
     if(!RendererIsValid(State->Renderer)) {
         *State->Renderer = AcquireRenderer(State->Window);
         if(!RendererIsValid(State->Renderer)) return;
-        
-        State->Renderer->Device->CreateVertexShader(
-            BetterSSVSBytes, sizeof(BetterSSVSBytes), 0, &State->Renderer->VertexShader);
-        State->Renderer->Device->CreatePixelShader(
-            BetterSSPSBytes, sizeof(BetterSSPSBytes), 0, &State->Renderer->OverlayShader);
-        
-        InitializeLineRenderer(State->Renderer, 
-            BetterSSLineVSBytes, sizeof(BetterSSLineVSBytes),
-            BetterSSLinePSBytes, sizeof(BetterSSLinePSBytes));
-        
-        // Need fresh capture if renderer was recreated
+        InitializeShaders(State->Renderer);
         ReleaseDuplications(State->Capture);
     }
 
@@ -592,6 +592,10 @@ static int RenderOverlay(betterss_state *State) {
     return RendererPresent(R);
 }
 
+static void RefreshOverlay(betterss_state *State) {
+    if(!RenderOverlay(State)) HideOverlay(State);
+}
+
 static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam) {
     betterss_state *State = (betterss_state *)GetWindowLongPtrW(Window, GWLP_USERDATA);
     
@@ -658,11 +662,11 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                 if(State->Selection->IsDragging) {
                     SelectionUpdate(State->Selection, X, Y);
                     UpdateOverlayShader(State);
-                    if(!RenderOverlay(State)) { HideOverlay(State); }
+                    RefreshOverlay(State);
                 }
                 else if(State->Selection->IsAnnotating) {
                     AnnotationUpdate(State->Selection, X, Y);
-                    if(!RenderOverlay(State)) { HideOverlay(State); }
+                    RefreshOverlay(State);
                 }
             }
         } break;
@@ -720,7 +724,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
         case WM_MBUTTONDOWN: {
             if(State->IsCapturing) {
                 AnnotationUndo(State->Selection);
-                if(!RenderOverlay(State)) { HideOverlay(State); }
+                RefreshOverlay(State);
             }
         } break;
 
@@ -744,7 +748,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                 }
                 else if(WParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) {
                     AnnotationUndo(State->Selection);
-                    if(!RenderOverlay(State)) { HideOverlay(State); }
+                    RefreshOverlay(State);
                 }
             }
         } break;
@@ -792,15 +796,7 @@ void WinMainCRTStartup(void) {
 
     *State->Renderer = AcquireRenderer(Window);
     if(!RendererIsValid(State->Renderer)) ExitProcess(2);
-
-    State->Renderer->Device->CreateVertexShader(
-        BetterSSVSBytes, sizeof(BetterSSVSBytes), 0, &State->Renderer->VertexShader);
-    State->Renderer->Device->CreatePixelShader(
-        BetterSSPSBytes, sizeof(BetterSSPSBytes), 0, &State->Renderer->OverlayShader);
-
-    InitializeLineRenderer(State->Renderer, 
-        BetterSSLineVSBytes, sizeof(BetterSSLineVSBytes),
-        BetterSSLinePSBytes, sizeof(BetterSSLinePSBytes));
+    InitializeShaders(State->Renderer);
 
     InitializeCaptureState(State->Capture);
     if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) ExitProcess(3);

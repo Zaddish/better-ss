@@ -10,6 +10,15 @@ static float FastSqrt(float X) {
     return Result;
 }
 
+static void CreateDynamicBuffer(ID3D11Device *Device, ID3D11Buffer **Out, UINT ByteWidth, UINT BindFlags) {
+    D3D11_BUFFER_DESC Desc = {};
+    Desc.ByteWidth = ByteWidth;
+    Desc.Usage = D3D11_USAGE_DYNAMIC;
+    Desc.BindFlags = BindFlags;
+    Desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    Device->CreateBuffer(&Desc, 0, Out);
+}
+
 static int RendererIsValid(betterss_renderer *Renderer) {
     int Result = (Renderer->Device &&
                   Renderer->SwapChain &&
@@ -150,12 +159,8 @@ static betterss_renderer AcquireRenderer(HWND Window) {
         if(SUCCEEDED(Result.Context->QueryInterface(IID_PPV_ARGS(&Result.Context1)))) {
             Result.SwapChain = AcquireSwapChain(Result.Device, Window);
             if(Result.SwapChain) {
-                D3D11_BUFFER_DESC ConstBufferDesc = {};
-                ConstBufferDesc.ByteWidth = sizeof(overlay_const_buffer);
-                ConstBufferDesc.Usage = D3D11_USAGE_DYNAMIC;
-                ConstBufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-                ConstBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-                Result.Device->CreateBuffer(&ConstBufferDesc, 0, &Result.ConstantBuffer);
+                CreateDynamicBuffer(Result.Device, &Result.ConstantBuffer, 
+                    sizeof(overlay_const_buffer), D3D11_BIND_CONSTANT_BUFFER);
 
                 D3D11_SAMPLER_DESC SamplerDesc = {};
                 SamplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -211,20 +216,12 @@ static void InitializeLineRenderer(betterss_renderer *Renderer,
     Renderer->Device->CreateInputLayout(InputDesc, ArrayCount(InputDesc), 
         LineVSBytes, LineVSSize, &Renderer->LineInputLayout);
     
-    D3D11_BUFFER_DESC ConstBufferDesc = {};
-    ConstBufferDesc.ByteWidth = sizeof(line_const_buffer);
-    ConstBufferDesc.Usage = D3D11_USAGE_DYNAMIC;
-    ConstBufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    ConstBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    Renderer->Device->CreateBuffer(&ConstBufferDesc, 0, &Renderer->LineConstantBuffer);
+    CreateDynamicBuffer(Renderer->Device, &Renderer->LineConstantBuffer, 
+        sizeof(line_const_buffer), D3D11_BIND_CONSTANT_BUFFER);
     
     Renderer->LineVertexBufferCapacity = 4096;
-    D3D11_BUFFER_DESC VertexBufferDesc = {};
-    VertexBufferDesc.ByteWidth = Renderer->LineVertexBufferCapacity * sizeof(line_vertex);
-    VertexBufferDesc.Usage = D3D11_USAGE_DYNAMIC;
-    VertexBufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    VertexBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    Renderer->Device->CreateBuffer(&VertexBufferDesc, 0, &Renderer->LineVertexBuffer);
+    CreateDynamicBuffer(Renderer->Device, &Renderer->LineVertexBuffer, 
+        Renderer->LineVertexBufferCapacity * sizeof(line_vertex), D3D11_BIND_VERTEX_BUFFER);
 }
 
 static void RenderAnnotationLines(betterss_renderer *R, selection_state *Selection, 
@@ -250,12 +247,8 @@ static void RenderAnnotationLines(betterss_renderer *R, selection_state *Selecti
         }
         
         R->LineVertexBufferCapacity = TotalVertexCount * 2;
-        D3D11_BUFFER_DESC VertexBufferDesc = {};
-        VertexBufferDesc.ByteWidth = R->LineVertexBufferCapacity * sizeof(line_vertex);
-        VertexBufferDesc.Usage = D3D11_USAGE_DYNAMIC;
-        VertexBufferDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-        VertexBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        R->Device->CreateBuffer(&VertexBufferDesc, 0, &R->LineVertexBuffer);
+        CreateDynamicBuffer(R->Device, &R->LineVertexBuffer, 
+            R->LineVertexBufferCapacity * sizeof(line_vertex), D3D11_BIND_VERTEX_BUFFER);
     }
     
     if(!R->LineVertexBuffer) return;
