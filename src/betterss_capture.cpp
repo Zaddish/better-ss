@@ -127,7 +127,7 @@ static void ReleaseAllFrames(capture_state *Capture) {
     }
 }
 
-static int CaptureMonitor(monitor_duplication *Mon, ID3D11Device *Device) {
+static int CaptureMonitor(monitor_duplication *Mon, ID3D11Device *Device, UINT TimeoutMs) {
     if(!Mon->IsValid || !Mon->Duplication) return(0);
 
     ReleaseFrame(Mon);
@@ -135,7 +135,7 @@ static int CaptureMonitor(monitor_duplication *Mon, ID3D11Device *Device) {
     IDXGIResource *Resource = 0;
     DXGI_OUTDUPL_FRAME_INFO FrameInfo;
 
-    HRESULT hr = Mon->Duplication->AcquireNextFrame(16, &FrameInfo, &Resource);
+    HRESULT hr = Mon->Duplication->AcquireNextFrame(TimeoutMs, &FrameInfo, &Resource);
 
     if(hr == DXGI_ERROR_WAIT_TIMEOUT) { return(0); }
 
@@ -172,7 +172,7 @@ static int CaptureAllMonitors(capture_state *Capture) {
     int AccessLost = 0;
 
     for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
-        int MonResult = CaptureMonitor(&Capture->Monitors[i], Capture->Device);
+        int MonResult = CaptureMonitor(&Capture->Monitors[i], Capture->Device, 16);
         if(MonResult == 1) {
             Result = 1;
         }
@@ -183,8 +183,20 @@ static int CaptureAllMonitors(capture_state *Capture) {
 
     if(AccessLost) return(-1);
 
-    // if we didn't capture anything, but didn't lose access, it might just be timeout?
-    // however, since we release frames before capture, we really want at least one successful capture  
-    // to show anything
+    // Retry any monitors that timed out with a longer deadline.
+    // DXGI requires ReleaseFrame before AcquireNextFrame, so we can't
+    // hold the old frame while waiting, but we can give stragglers
+    // more time on a second pass.
+    if(Result) {
+        for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
+            monitor_duplication *Mon = &Capture->Monitors[i];
+            if(!Mon->HasFrame && Mon->IsValid) {
+                int MonResult = CaptureMonitor(Mon, Capture->Device, 100);
+                if(MonResult == -1) AccessLost = 1;
+            }
+        }
+        if(AccessLost) return(-1);
+    }
+
     return(Result);
 }
