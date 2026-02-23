@@ -244,11 +244,7 @@ static int SavePixelsToFile(void *Pixels, uint32_t Width, uint32_t Height, uint3
     }
 
     uint8_t *Src = (uint8_t *)Pixels;
-    UINT Stride = Pitch;
-    for(uint32_t y = 0; y < Height; y++) {
-        hr = FrameEncoder->WritePixels(1, Stride, Stride, Src + y * Pitch);
-        if(FAILED(hr)) break;
-    }
+    hr = FrameEncoder->WritePixels(Height, Pitch, Height * Pitch, Src);
 
     if(SUCCEEDED(hr)) {
         hr = FrameEncoder->Commit();
