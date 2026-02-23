@@ -454,16 +454,12 @@ static void ShowOverlay(betterss_state *State) {
             BetterSSLinePSBytes, sizeof(BetterSSLinePSBytes));
         
         // Need fresh capture if renderer was recreated
-        if(State->Capture->Monitors) {
-            ReleaseCaptureState(State->Capture);
-        }
-        memset(State->Capture, 0, sizeof(*State->Capture));
+        ReleaseDuplications(State->Capture);
     }
 
     // Ensure we have valid capture state
     if(!CaptureIsValid(State->Capture)) {
-        *State->Capture = AcquireCaptureState(State->Renderer->Device);
-        if(!CaptureIsValid(State->Capture)) {
+        if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) {
             return;
         }
     }
@@ -471,11 +467,10 @@ static void ShowOverlay(betterss_state *State) {
     // try to capture frames
     int CaptureResult = CaptureAllMonitors(State->Capture);
     
-    // on access lost, recreate capture and retry once
+    // on access lost, refresh duplications and retry once
     if(CaptureResult == -1) {
-        ReleaseCaptureState(State->Capture);
-        *State->Capture = AcquireCaptureState(State->Renderer->Device);
-        if(!CaptureIsValid(State->Capture)) {
+        ReleaseDuplications(State->Capture);
+        if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) {
             return;
         }
         CaptureResult = CaptureAllMonitors(State->Capture);
@@ -486,7 +481,10 @@ static void ShowOverlay(betterss_state *State) {
         return;
     }
 
+    ArenaReset(&State->CaptureArena);
     SelectionReset(State->Selection);
+    AnnotationInit(State->Selection, &State->CaptureArena);
+    
     UpdateOverlayShader(State);
     RenderOverlay(State);
 
@@ -591,14 +589,9 @@ static int RenderOverlay(betterss_state *State) {
     int VirtLeft = State->Capture->VirtualScreen.left;
     int VirtTop = State->Capture->VirtualScreen.top;
 
-    D3D11_SHADER_RESOURCE_VIEW_DESC SRVDesc = {};
-    SRVDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    SRVDesc.Texture2D.MipLevels = 1;
-
     for(uint32_t i = 0; i < State->Capture->MonitorCount; i++) {
         monitor_duplication *Mon = &State->Capture->Monitors[i];
-        if(!Mon->HasFrame || !Mon->Texture) continue;
+        if(!Mon->HasFrame || !Mon->Texture || !Mon->SRV) continue;
 
         int MonW = Mon->Bounds.right - Mon->Bounds.left;
         int MonH = Mon->Bounds.bottom - Mon->Bounds.top;
@@ -614,14 +607,10 @@ static int RenderOverlay(betterss_state *State) {
         R->Context->RSSetViewports(1, &MonViewport);
 
         UpdateOverlayConstBuffer(R, SelectRect, Mon->Bounds, VirtLeft, VirtTop, Mon->Rotation);
-
-        ID3D11ShaderResourceView *SRV = 0;
-        if(SUCCEEDED(R->Device->CreateShaderResourceView(Mon->Texture, &SRVDesc, &SRV)) && SRV) {
-            R->Context->PSSetShaderResources(0, 1, &SRV);
-            R->Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            R->Context->Draw(3, 0);
-            SRV->Release();
-        }
+        
+        R->Context->PSSetShaderResources(0, 1, &Mon->SRV);
+        R->Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        R->Context->Draw(3, 0);
     }
 
     Viewport.Width = (float)R->Width;
@@ -747,7 +736,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
             if(State->IsCapturing && State->Selection) {
                 int X = (short)LOWORD(LParam);
                 int Y = (short)HIWORD(LParam);
-                AnnotationBegin(State->Selection, X, Y);
+                AnnotationBegin(State->Selection, &State->CaptureArena, X, Y);
                 SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32516)));
             }
         } break;
@@ -812,6 +801,13 @@ void WinMainCRTStartup(void) {
         MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if(!State) ExitProcess(1);
     
+    size_t ArenaSize = 16 * 1024 * 1024;
+    State->CaptureArena.Memory = (uint8_t *)VirtualAlloc(0, ArenaSize,
+        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    State->CaptureArena.Size = ArenaSize;
+    State->CaptureArena.Used = 0;
+    if(!State->CaptureArena.Memory) ExitProcess(1);
+    
     LoadSettings(State);
 
     HINSTANCE Instance = GetModuleHandleW(0);
@@ -840,8 +836,8 @@ void WinMainCRTStartup(void) {
         BetterSSLineVSBytes, sizeof(BetterSSLineVSBytes),
         BetterSSLinePSBytes, sizeof(BetterSSLinePSBytes));
 
-    *State->Capture = AcquireCaptureState(State->Renderer->Device);
-    if(!CaptureIsValid(State->Capture)) ExitProcess(3);
+    InitializeCaptureState(State->Capture);
+    if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) ExitProcess(3);
 
     CloakWindow(Window, TRUE);
     ShowWindow(Window, SW_HIDE);
@@ -863,6 +859,10 @@ void WinMainCRTStartup(void) {
     RemoveTrayIcon(State);
     ReleaseCaptureState(State->Capture);
     ReleaseRenderer(State->Renderer);
+    
+    if(State->CaptureArena.Memory) {
+        VirtualFree(State->CaptureArena.Memory, 0, MEM_RELEASE);
+    }
 
     ExitProcess(0);
 }

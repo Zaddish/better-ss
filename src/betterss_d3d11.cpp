@@ -121,6 +121,11 @@ static void ReleaseRenderer(betterss_renderer *Renderer) {
     if(Renderer->LineConstantBuffer) Renderer->LineConstantBuffer->Release();
     if(Renderer->LineVertexBuffer) Renderer->LineVertexBuffer->Release();
     if(Renderer->LineInputLayout) Renderer->LineInputLayout->Release();
+    
+    if(Renderer->CachedRTV) Renderer->CachedRTV->Release();
+    if(Renderer->CachedRenderTexture) Renderer->CachedRenderTexture->Release();
+    if(Renderer->CachedStagingTexture) Renderer->CachedStagingTexture->Release();
+    
     if(Renderer->SwapChain) Renderer->SwapChain->Release();
     if(Renderer->Context1) Renderer->Context1->Release();
     if(Renderer->Context) Renderer->Context->Release();
@@ -226,13 +231,13 @@ static void InitializeLineRenderer(betterss_renderer *Renderer,
 static void RenderAnnotationLines(betterss_renderer *R, selection_state *Selection, 
                                    int OffsetX, int OffsetY, int TargetWidth, int TargetHeight) {
     if(!R->LineVertexShader || !R->LinePixelShader || !R->LineInputLayout) return;
-    if(!Selection || Selection->LineCount == 0) return;
+    if(!Selection || Selection->LineCount == 0 || !Selection->Lines) return;
     
     // each line segment needs 6 verts
     int TotalVertexCount = 0;
     for(int i = 0; i < Selection->LineCount; i++) {
         annotation_line *Line = &Selection->Lines[i];
-        if(Line->PointCount > 1) {
+        if(Line->Points && Line->PointCount > 1) {
             TotalVertexCount += (Line->PointCount - 1) * 6;
         }
     }
@@ -265,6 +270,7 @@ static void RenderAnnotationLines(betterss_renderer *R, selection_state *Selecti
         
         for(int i = 0; i < Selection->LineCount; i++) {
             annotation_line *Line = &Selection->Lines[i];
+            if(!Line->Points || Line->PointCount <= 1) continue;
             for(int j = 0; j < Line->PointCount - 1; j++) {
                 float X0 = (float)(Line->Points[j].X + OffsetX);
                 float Y0 = (float)(Line->Points[j].Y + OffsetY);

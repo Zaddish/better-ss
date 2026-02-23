@@ -22,6 +22,27 @@ struct betterss_renderer;
 struct capture_state;
 struct selection_state;
 
+struct memory_arena
+{
+    uint8_t *Memory;
+    size_t Size;
+    size_t Used;
+};
+
+static inline void *ArenaAlloc(memory_arena *Arena, size_t Size) {
+    size_t Aligned = (Size + 15) & ~15;
+    if(Arena->Used + Aligned > Arena->Size) {
+        return 0;
+    }
+    void *Result = Arena->Memory + Arena->Used;
+    Arena->Used += Aligned;
+    return Result;
+}
+
+static inline void ArenaReset(memory_arena *Arena) {
+    Arena->Used = 0;
+}
+
 struct betterss_state
 {
     HWND Window;
@@ -29,6 +50,8 @@ struct betterss_state
     capture_state *Capture;
     selection_state *Selection;
     int IsCapturing;
+    
+    memory_arena CaptureArena;
     
     // settings
     UINT HotkeyMods;

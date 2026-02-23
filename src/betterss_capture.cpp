@@ -1,8 +1,12 @@
 static int CaptureIsValid(capture_state *Capture) {
-    return(Capture->Monitors && Capture->MonitorCount > 0);
+    return(Capture->IsInitialized && Capture->Monitors && Capture->MonitorCount > 0);
 }
 
 static void ReleaseMonitorDuplication(monitor_duplication *Mon) {
+    if(Mon->SRV) {
+        Mon->SRV->Release();
+        Mon->SRV = 0;
+    }
     if(Mon->Texture) {
         Mon->Texture->Release();
         Mon->Texture = 0;
@@ -15,46 +19,63 @@ static void ReleaseMonitorDuplication(monitor_duplication *Mon) {
     Mon->HasFrame = 0;
 }
 
-static void ReleaseCaptureState(capture_state *Capture) {
+static void InitializeCaptureState(capture_state *Capture) {
+    if(Capture->IsInitialized) return;
+    
+    Capture->MonitorCapacity = 8;
+    Capture->Monitors = (monitor_duplication *)VirtualAlloc(0, 
+        Capture->MonitorCapacity * sizeof(monitor_duplication), 
+        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    
+    if(Capture->Monitors) {
+        Capture->IsInitialized = 1;
+    }
+}
+
+static void ReleaseDuplications(capture_state *Capture) {
     for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
         ReleaseMonitorDuplication(&Capture->Monitors[i]);
     }
-    if(Capture->Monitors) {
-        VirtualFree(Capture->Monitors, 0, MEM_RELEASE);
-    }
-    *Capture = {};
+    Capture->MonitorCount = 0;
+    Capture->Device = 0;
 }
 
-static capture_state AcquireCaptureState(ID3D11Device *Device) {
-    capture_state Result = {};
-    Result.Device = Device;
+static void ReleaseCaptureState(capture_state *Capture) {
+    ReleaseDuplications(Capture);
+    if(Capture->Monitors) {
+        VirtualFree(Capture->Monitors, 0, MEM_RELEASE);
+        Capture->Monitors = 0;
+    }
+    Capture->IsInitialized = 0;
+    Capture->MonitorCapacity = 0;
+}
 
-    Result.VirtualScreen.left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    Result.VirtualScreen.top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    Result.VirtualScreen.right = Result.VirtualScreen.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    Result.VirtualScreen.bottom = Result.VirtualScreen.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
-
-    Result.MonitorCapacity = 16;
-    Result.Monitors = (monitor_duplication *)VirtualAlloc(0, 
-        Result.MonitorCapacity * sizeof(monitor_duplication), 
-        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-
-    if(!Result.Monitors) return(Result);
+static int RefreshCaptureState(capture_state *Capture, ID3D11Device *Device) {
+    if(!Capture->IsInitialized || !Capture->Monitors) return 0;
+    
+    ReleaseDuplications(Capture);
+    
+    Capture->Device = Device;
+    
+    Capture->VirtualScreen.left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    Capture->VirtualScreen.top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    Capture->VirtualScreen.right = Capture->VirtualScreen.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    Capture->VirtualScreen.bottom = Capture->VirtualScreen.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
 
     IDXGIDevice *DxgiDevice = 0;
     if(FAILED(Device->QueryInterface(IID_PPV_ARGS(&DxgiDevice)))) {
-        return(Result);
+        return 0;
     }
 
     IDXGIAdapter *Adapter = 0;
     if(FAILED(DxgiDevice->GetAdapter(&Adapter))) {
         DxgiDevice->Release();
-        return(Result);
+        return 0;
     }
 
     IDXGIOutput *Output = 0;
     for(UINT OutputIdx = 0; SUCCEEDED(Adapter->EnumOutputs(OutputIdx, &Output)); OutputIdx++) {
-        if(Result.MonitorCount >= Result.MonitorCapacity) {
+        if(Capture->MonitorCount >= Capture->MonitorCapacity) {
             Output->Release();
             break;
         }
@@ -64,13 +85,13 @@ static capture_state AcquireCaptureState(ID3D11Device *Device) {
 
         IDXGIOutput1 *Output1 = 0;
         if(SUCCEEDED(Output->QueryInterface(IID_PPV_ARGS(&Output1)))) {
-            monitor_duplication *Mon = &Result.Monitors[Result.MonitorCount];
+            monitor_duplication *Mon = &Capture->Monitors[Capture->MonitorCount];
             Mon->Bounds = OutputDesc.DesktopCoordinates;
             Mon->Rotation = OutputDesc.Rotation;
 
             if(SUCCEEDED(Output1->DuplicateOutput(Device, &Mon->Duplication))) {
                 Mon->IsValid = 1;
-                Result.MonitorCount++;
+                Capture->MonitorCount++;
             }
 
             Output1->Release();
@@ -82,11 +103,15 @@ static capture_state AcquireCaptureState(ID3D11Device *Device) {
     Adapter->Release();
     DxgiDevice->Release();
 
-    return(Result);
+    return(Capture->MonitorCount > 0 ? 1 : 0);
 }
 
 static void ReleaseFrame(monitor_duplication *Mon) {
     if(Mon->HasFrame) {
+        if(Mon->SRV) {
+            Mon->SRV->Release();
+            Mon->SRV = 0;
+        }
         if(Mon->Texture) {
             Mon->Texture->Release();
             Mon->Texture = 0;
@@ -102,7 +127,7 @@ static void ReleaseAllFrames(capture_state *Capture) {
     }
 }
 
-static int CaptureMonitor(monitor_duplication *Mon) {
+static int CaptureMonitor(monitor_duplication *Mon, ID3D11Device *Device) {
     if(!Mon->IsValid || !Mon->Duplication) return(0);
 
     ReleaseFrame(Mon);
@@ -119,6 +144,13 @@ static int CaptureMonitor(monitor_duplication *Mon) {
         Resource->Release();
 
         if(SUCCEEDED(hr)) {
+            D3D11_SHADER_RESOURCE_VIEW_DESC SRVDesc = {};
+            SRVDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            SRVDesc.Texture2D.MipLevels = 1;
+            
+            Device->CreateShaderResourceView(Mon->Texture, &SRVDesc, &Mon->SRV);
+            
             Mon->HasFrame = 1;
             return(1);
         }
@@ -135,7 +167,7 @@ static int CaptureAllMonitors(capture_state *Capture) {
     int AccessLost = 0;
 
     for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
-        int MonResult = CaptureMonitor(&Capture->Monitors[i]);
+        int MonResult = CaptureMonitor(&Capture->Monitors[i], Capture->Device);
         if(MonResult == 1) {
             Result = 1;
         }

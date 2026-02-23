@@ -6,6 +6,7 @@ struct monitor_duplication
 {
     IDXGIOutputDuplication *Duplication;
     ID3D11Texture2D *Texture;
+    ID3D11ShaderResourceView *SRV;
     RECT Bounds;
     DXGI_MODE_ROTATION Rotation;
     int IsValid;
@@ -19,10 +20,13 @@ struct capture_state
     uint32_t MonitorCount;
     uint32_t MonitorCapacity;
     RECT VirtualScreen;
+    int IsInitialized;
 };
 
 static int CaptureIsValid(capture_state *Capture);
-static capture_state AcquireCaptureState(ID3D11Device *Device);
+static void InitializeCaptureState(capture_state *Capture);
+static int RefreshCaptureState(capture_state *Capture, ID3D11Device *Device);
+static void ReleaseDuplications(capture_state *Capture);
 static void ReleaseCaptureState(capture_state *Capture);
 static int CaptureAllMonitors(capture_state *Capture);
 static void ReleaseAllFrames(capture_state *Capture);

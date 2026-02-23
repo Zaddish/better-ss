@@ -2,6 +2,9 @@
 
 #pragma once
 
+#define MAX_ANNOTATION_LINES 128
+#define MAX_POINTS_PER_LINE 2048
+
 struct line_point
 {
     int X, Y;
@@ -26,7 +29,7 @@ struct selection_state
     // Annotations
     annotation_line *Lines;
     int LineCount;
-    int LineCapacity;
+    int MaxLines;
     int IsAnnotating;
     int CurrentLineIndex;
 };
@@ -38,7 +41,8 @@ static void SelectionEnd(selection_state *Selection);
 static void SelectionCancel(selection_state *Selection);
 static RECT SelectionGetRect(selection_state *Selection);
 
-static void AnnotationBegin(selection_state *Selection, int X, int Y);
+static void AnnotationInit(selection_state *Selection, memory_arena *Arena);
+static void AnnotationBegin(selection_state *Selection, memory_arena *Arena, int X, int Y);
 static void AnnotationUpdate(selection_state *Selection, int X, int Y);
 static void AnnotationEnd(selection_state *Selection);
 static void AnnotationUndo(selection_state *Selection);

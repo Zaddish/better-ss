@@ -46,6 +46,13 @@ struct betterss_renderer
     ID3D11Buffer *LineVertexBuffer;
     ID3D11InputLayout *LineInputLayout;
     uint32_t LineVertexBufferCapacity;
+    ID3D11Texture2D *CachedStagingTexture;
+    ID3D11Texture2D *CachedRenderTexture;
+    ID3D11RenderTargetView *CachedRTV;
+    uint32_t CachedStagingWidth;
+    uint32_t CachedStagingHeight;
+    uint32_t CachedRenderWidth;
+    uint32_t CachedRenderHeight;
 };
 
 static int RendererIsValid(betterss_renderer *Renderer);

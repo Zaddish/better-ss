@@ -4,9 +4,18 @@
 #include <wincodec.h>
 #include <objbase.h>
 
-static ID3D11Texture2D *CreateStagingTexture(ID3D11Device *Device, uint32_t Width, uint32_t Height) {
-    ID3D11Texture2D *Result = 0;
-
+static ID3D11Texture2D *GetCachedStagingTexture(betterss_renderer *R, uint32_t Width, uint32_t Height) {
+    if(R->CachedStagingTexture && 
+       R->CachedStagingWidth >= Width && 
+       R->CachedStagingHeight >= Height) {
+        return R->CachedStagingTexture;
+    }
+    
+    if(R->CachedStagingTexture) {
+        R->CachedStagingTexture->Release();
+        R->CachedStagingTexture = 0;
+    }
+    
     D3D11_TEXTURE2D_DESC Desc = {};
     Desc.Width = Width;
     Desc.Height = Height;
@@ -17,13 +26,32 @@ static ID3D11Texture2D *CreateStagingTexture(ID3D11Device *Device, uint32_t Widt
     Desc.Usage = D3D11_USAGE_STAGING;
     Desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 
-    Device->CreateTexture2D(&Desc, 0, &Result);
-    return(Result);
+    R->Device->CreateTexture2D(&Desc, 0, &R->CachedStagingTexture);
+    
+    if(R->CachedStagingTexture) {
+        R->CachedStagingWidth = Width;
+        R->CachedStagingHeight = Height;
+    }
+    
+    return R->CachedStagingTexture;
 }
 
-static ID3D11Texture2D *CreateRenderTexture(ID3D11Device *Device, uint32_t Width, uint32_t Height) {
-    ID3D11Texture2D *Result = 0;
-
+static ID3D11Texture2D *GetCachedRenderTexture(betterss_renderer *R, uint32_t Width, uint32_t Height) {
+    if(R->CachedRenderTexture && 
+       R->CachedRenderWidth >= Width && 
+       R->CachedRenderHeight >= Height) {
+        return R->CachedRenderTexture;
+    }
+    
+    if(R->CachedRTV) {
+        R->CachedRTV->Release();
+        R->CachedRTV = 0;
+    }
+    if(R->CachedRenderTexture) {
+        R->CachedRenderTexture->Release();
+        R->CachedRenderTexture = 0;
+    }
+    
     D3D11_TEXTURE2D_DESC Desc = {};
     Desc.Width = Width;
     Desc.Height = Height;
@@ -34,8 +62,15 @@ static ID3D11Texture2D *CreateRenderTexture(ID3D11Device *Device, uint32_t Width
     Desc.Usage = D3D11_USAGE_DEFAULT;
     Desc.BindFlags = D3D11_BIND_RENDER_TARGET;
 
-    Device->CreateTexture2D(&Desc, 0, &Result);
-    return(Result);
+    R->Device->CreateTexture2D(&Desc, 0, &R->CachedRenderTexture);
+    
+    if(R->CachedRenderTexture) {
+        R->Device->CreateRenderTargetView(R->CachedRenderTexture, 0, &R->CachedRTV);
+        R->CachedRenderWidth = Width;
+        R->CachedRenderHeight = Height;
+    }
+    
+    return R->CachedRenderTexture;
 }
 
 static int FindMonitorForRect(capture_state *C, RECT Selection, monitor_duplication **OutMon) {
@@ -241,7 +276,7 @@ static int CopySelectionToClipboard(betterss_renderer *R, capture_state *C, RECT
 
     // If no annotations, use fast path
     if(!S || S->LineCount == 0) {
-        ID3D11Texture2D *Staging = CreateStagingTexture(R->Device, (uint32_t)SelWidth, (uint32_t)SelHeight);
+        ID3D11Texture2D *Staging = GetCachedStagingTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
         if(!Staging) return(0);
 
         D3D11_BOX SrcBox = {};
@@ -263,19 +298,12 @@ static int CopySelectionToClipboard(betterss_renderer *R, capture_state *C, RECT
             R->Context->Unmap(Staging, 0);
         }
 
-        Staging->Release();
         return(Result);
     }
 
     // With annotations: render to intermediate texture
-    ID3D11Texture2D *RenderTexture = CreateRenderTexture(R->Device, (uint32_t)SelWidth, (uint32_t)SelHeight);
-    if(!RenderTexture) return(0);
-
-    ID3D11RenderTargetView *RTV = 0;
-    if(FAILED(R->Device->CreateRenderTargetView(RenderTexture, 0, &RTV))) {
-        RenderTexture->Release();
-        return(0);
-    }
+    ID3D11Texture2D *RenderTexture = GetCachedRenderTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
+    if(!RenderTexture || !R->CachedRTV) return(0);
 
     // Copy desktop region first
     D3D11_BOX SrcBox = {};
@@ -289,7 +317,7 @@ static int CopySelectionToClipboard(betterss_renderer *R, capture_state *C, RECT
     R->Context->CopySubresourceRegion(RenderTexture, 0, 0, 0, 0, Mon->Texture, 0, &SrcBox);
 
     // Render annotations on top
-    R->Context->OMSetRenderTargets(1, &RTV, 0);
+    R->Context->OMSetRenderTargets(1, &R->CachedRTV, 0);
     
     D3D11_VIEWPORT Viewport = {};
     Viewport.Width = (float)SelWidth;
@@ -298,18 +326,12 @@ static int CopySelectionToClipboard(betterss_renderer *R, capture_state *C, RECT
     R->Context->RSSetViewports(1, &Viewport);
     
     RenderAnnotationLines(R, S, -Selection.left, -Selection.top, SelWidth, SelHeight);
-    
-    RTV->Release();
 
     // Copy to staging
-    ID3D11Texture2D *Staging = CreateStagingTexture(R->Device, (uint32_t)SelWidth, (uint32_t)SelHeight);
-    if(!Staging) {
-        RenderTexture->Release();
-        return(0);
-    }
+    ID3D11Texture2D *Staging = GetCachedStagingTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
+    if(!Staging) return(0);
 
     R->Context->CopyResource(Staging, RenderTexture);
-    RenderTexture->Release();
 
     D3D11_MAPPED_SUBRESOURCE Mapped;
     HRESULT hr = R->Context->Map(Staging, 0, D3D11_MAP_READ, 0, &Mapped);
@@ -320,7 +342,6 @@ static int CopySelectionToClipboard(betterss_renderer *R, capture_state *C, RECT
         R->Context->Unmap(Staging, 0);
     }
 
-    Staging->Release();
     return(Result);
 }
 
@@ -352,7 +373,7 @@ static int SaveSelectionToFile(betterss_renderer *R, capture_state *C, RECT Sele
 
     // If no annotations, use fast path
     if(!S || S->LineCount == 0) {
-        ID3D11Texture2D *Staging = CreateStagingTexture(R->Device, (uint32_t)SelWidth, (uint32_t)SelHeight);
+        ID3D11Texture2D *Staging = GetCachedStagingTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
         if(!Staging) return(0);
 
         D3D11_BOX SrcBox = {};
@@ -374,19 +395,12 @@ static int SaveSelectionToFile(betterss_renderer *R, capture_state *C, RECT Sele
             R->Context->Unmap(Staging, 0);
         }
 
-        Staging->Release();
         return(Result);
     }
 
     // With annotations: render to intermediate texture
-    ID3D11Texture2D *RenderTexture = CreateRenderTexture(R->Device, (uint32_t)SelWidth, (uint32_t)SelHeight);
-    if(!RenderTexture) return(0);
-
-    ID3D11RenderTargetView *RTV = 0;
-    if(FAILED(R->Device->CreateRenderTargetView(RenderTexture, 0, &RTV))) {
-        RenderTexture->Release();
-        return(0);
-    }
+    ID3D11Texture2D *RenderTexture = GetCachedRenderTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
+    if(!RenderTexture || !R->CachedRTV) return(0);
 
     // Copy desktop region first
     D3D11_BOX SrcBox = {};
@@ -400,7 +414,7 @@ static int SaveSelectionToFile(betterss_renderer *R, capture_state *C, RECT Sele
     R->Context->CopySubresourceRegion(RenderTexture, 0, 0, 0, 0, Mon->Texture, 0, &SrcBox);
 
     // Render annotations on top
-    R->Context->OMSetRenderTargets(1, &RTV, 0);
+    R->Context->OMSetRenderTargets(1, &R->CachedRTV, 0);
     
     D3D11_VIEWPORT Viewport = {};
     Viewport.Width = (float)SelWidth;
@@ -409,18 +423,10 @@ static int SaveSelectionToFile(betterss_renderer *R, capture_state *C, RECT Sele
     R->Context->RSSetViewports(1, &Viewport);
     
     RenderAnnotationLines(R, S, -Selection.left, -Selection.top, SelWidth, SelHeight);
-    
-    RTV->Release();
-
-    // Copy to staging
-    ID3D11Texture2D *Staging = CreateStagingTexture(R->Device, (uint32_t)SelWidth, (uint32_t)SelHeight);
-    if(!Staging) {
-        RenderTexture->Release();
-        return(0);
-    }
+    ID3D11Texture2D *Staging = GetCachedStagingTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
+    if(!Staging) return(0);
 
     R->Context->CopyResource(Staging, RenderTexture);
-    RenderTexture->Release();
 
     D3D11_MAPPED_SUBRESOURCE Mapped;
     HRESULT hr = R->Context->Map(Staging, 0, D3D11_MAP_READ, 0, &Mapped);
@@ -431,7 +437,5 @@ static int SaveSelectionToFile(betterss_renderer *R, capture_state *C, RECT Sele
         R->Context->Unmap(Staging, 0);
     }
 
-    Staging->Release();
     return(Result);
 }
-
