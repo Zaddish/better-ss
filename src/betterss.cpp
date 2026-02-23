@@ -258,7 +258,7 @@ static void RegisterCurrentHotkey(betterss_state *State) {
 }
 
 static void UpdateTrayTip(betterss_state *State) {
-    wchar_t Tip[128] = L"BetterSS\nCapture: ";
+    wchar_t Tip[256] = L"BetterSS\nCapture: ";
     wchar_t HotkeyStr[64];
     GetHotkeyString(&State->CaptureHotkey, HotkeyStr, 64);
     wcscat_internal(Tip, 128, HotkeyStr);
