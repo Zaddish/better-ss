@@ -157,7 +157,15 @@ static int CopyPixelsToClipboard(void *Pixels, uint32_t Width, uint32_t Height, 
 
     GlobalUnlock(hMem);
 
-    if(OpenClipboard(0)) {
+    // OpenClipboard fails if another process has it open;
+    // so we'll retry briefly for transient contention
+    int Opened = 0;
+    for(int Attempt = 0; Attempt < 10; Attempt++) {
+        if(OpenClipboard(0)) { Opened = 1; break; }
+        Sleep(10);
+    }
+
+    if(Opened) {
         EmptyClipboard();
         SetClipboardData(CF_DIB, hMem);
         CloseClipboard();

@@ -3,7 +3,7 @@
 
 #include <windows.h>
 #include <d3d11_1.h>
-#include <dxgi1_3.h>
+#include <dxgi1_5.h>
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <commdlg.h>
@@ -486,7 +486,9 @@ static void ShowOverlay(betterss_state *State) {
     AnnotationInit(State->Selection, &State->CaptureArena);
     
     UpdateOverlayShader(State);
-    RenderOverlay(State);
+    if(!RenderOverlay(State)) {
+        return;
+    }
 
     CloakWindow(State->Window, FALSE);
     ShowWindow(State->Window, SW_SHOW);
@@ -689,11 +691,11 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                 if(State->Selection->IsDragging) {
                     SelectionUpdate(State->Selection, X, Y);
                     UpdateOverlayShader(State);
-                    RenderOverlay(State);
+                    if(!RenderOverlay(State)) { HideOverlay(State); }
                 }
                 else if(State->Selection->IsAnnotating) {
                     AnnotationUpdate(State->Selection, X, Y);
-                    RenderOverlay(State);
+                    if(!RenderOverlay(State)) { HideOverlay(State); }
                 }
             }
         } break;
@@ -751,7 +753,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
         case WM_MBUTTONDOWN: {
             if(State->IsCapturing && State->Selection) {
                 AnnotationUndo(State->Selection);
-                RenderOverlay(State);
+                if(!RenderOverlay(State)) { HideOverlay(State); }
             }
         } break;
 
@@ -775,7 +777,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                 }
                 else if(WParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) {
                     AnnotationUndo(State->Selection);
-                    RenderOverlay(State);
+                    if(!RenderOverlay(State)) { HideOverlay(State); }
                 }
             }
         } break;
@@ -794,6 +796,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 }
 
 void WinMainCRTStartup(void) {
+    CoInitializeEx(0, COINIT_APARTMENTTHREADED);
     PreventWindowsDPIScaling();
     
     // Allocate state

@@ -93,16 +93,24 @@ static void RendererResize(betterss_renderer *Renderer, uint32_t Width, uint32_t
     HRESULT hr = Renderer->SwapChain->ResizeBuffers(0, Width, Height, 
         DXGI_FORMAT_UNKNOWN, 
         DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT | DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING);
-    AssertHR(hr);
+    if(FAILED(hr)) {
+        ReleaseRenderer(Renderer);
+        return;
+    }
 
-    ID3D11Texture2D *BackBuffer;
+    ID3D11Texture2D *BackBuffer = 0;
     hr = Renderer->SwapChain->GetBuffer(0, IID_PPV_ARGS(&BackBuffer));
-    AssertHR(hr);
+    if(FAILED(hr)) {
+        ReleaseRenderer(Renderer);
+        return;
+    }
 
     hr = Renderer->Device->CreateRenderTargetView(BackBuffer, 0, &Renderer->RenderTarget);
-    AssertHR(hr);
-
     BackBuffer->Release();
+    if(FAILED(hr)) {
+        ReleaseRenderer(Renderer);
+        return;
+    }
 
     Renderer->Width = Width;
     Renderer->Height = Height;
@@ -186,6 +194,9 @@ static int RendererPresent(betterss_renderer *Renderer) {
     HRESULT hr = Renderer->SwapChain->Present(0, DXGI_PRESENT_ALLOW_TEARING);
 
     if((hr == DXGI_ERROR_DEVICE_RESET) || (hr == DXGI_ERROR_DEVICE_REMOVED)) {
+        HRESULT Reason = Renderer->Device->GetDeviceRemovedReason();
+        (void)Reason;
+        OutputDebugStringA("D3D11: device removed during Present\n");
         ReleaseRenderer(Renderer);
         return(0);
     }

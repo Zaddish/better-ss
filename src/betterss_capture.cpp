@@ -83,18 +83,18 @@ static int RefreshCaptureState(capture_state *Capture, ID3D11Device *Device) {
         DXGI_OUTPUT_DESC OutputDesc;
         Output->GetDesc(&OutputDesc);
 
-        IDXGIOutput1 *Output1 = 0;
-        if(SUCCEEDED(Output->QueryInterface(IID_PPV_ARGS(&Output1)))) {
-            monitor_duplication *Mon = &Capture->Monitors[Capture->MonitorCount];
-            Mon->Bounds = OutputDesc.DesktopCoordinates;
-            Mon->Rotation = OutputDesc.Rotation;
+        monitor_duplication *Mon = &Capture->Monitors[Capture->MonitorCount];
+        Mon->Bounds = OutputDesc.DesktopCoordinates;
+        Mon->Rotation = OutputDesc.Rotation;
 
-            if(SUCCEEDED(Output1->DuplicateOutput(Device, &Mon->Duplication))) {
+        IDXGIOutput5 *Output5 = 0;
+        if(SUCCEEDED(Output->QueryInterface(IID_PPV_ARGS(&Output5)))) {
+            DXGI_FORMAT Formats[] = { DXGI_FORMAT_B8G8R8A8_UNORM };
+            if(SUCCEEDED(Output5->DuplicateOutput1(Device, 0, ArrayCount(Formats), Formats, &Mon->Duplication))) {
                 Mon->IsValid = 1;
                 Capture->MonitorCount++;
             }
-
-            Output1->Release();
+            Output5->Release();
         }
 
         Output->Release();
@@ -149,10 +149,15 @@ static int CaptureMonitor(monitor_duplication *Mon, ID3D11Device *Device) {
             SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
             SRVDesc.Texture2D.MipLevels = 1;
             
-            Device->CreateShaderResourceView(Mon->Texture, &SRVDesc, &Mon->SRV);
-            
-            Mon->HasFrame = 1;
-            return(1);
+            hr = Device->CreateShaderResourceView(Mon->Texture, &SRVDesc, &Mon->SRV);
+            if(SUCCEEDED(hr)) {
+                Mon->HasFrame = 1;
+                return(1);
+            }
+
+            Mon->Texture->Release();
+            Mon->Texture = 0;
+            Mon->Duplication->ReleaseFrame();
         }
     }
     else if(hr == DXGI_ERROR_ACCESS_LOST) {
