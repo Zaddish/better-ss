@@ -269,17 +269,25 @@ static int SavePixelsToFile(void *Pixels, uint32_t Width, uint32_t Height, uint3
     return(SUCCEEDED(hr) ? 1 : 0);
 }
 
-static int CopySelectionToClipboard(betterss_renderer *R, capture_state *C, RECT Selection, selection_state *S) {
-    if(!R || !R->Device || !R->Context || !C) return(0);
-    
+struct resolved_pixels {
+    void *Data;
+    uint32_t Width;
+    uint32_t Height;
+    uint32_t Pitch;
+    ID3D11Texture2D *Staging;
+    betterss_renderer *Renderer;
+};
+
+static resolved_pixels ResolveSelectionPixels(betterss_renderer *R, capture_state *C, RECT Selection, selection_state *S) {
+    resolved_pixels Result = {};
+    if(!R || !R->Device || !R->Context || !C) return(Result);
+
     monitor_duplication *Mon = 0;
-    if(!FindMonitorForRect(C, Selection, &Mon)) {
-        return(0);
-    }
+    if(!FindMonitorForRect(C, Selection, &Mon)) return(Result);
 
     int SelWidth = Selection.right - Selection.left;
     int SelHeight = Selection.bottom - Selection.top;
-    if(SelWidth <= 0 || SelHeight <= 0) return(0);
+    if(SelWidth <= 0 || SelHeight <= 0) return(Result);
 
     int VirtLeft = Selection.left + C->VirtualScreen.left;
     int VirtTop = Selection.top + C->VirtualScreen.top;
@@ -293,40 +301,8 @@ static int CopySelectionToClipboard(betterss_renderer *R, capture_state *C, RECT
     if(LocalTop < 0) { SelHeight += LocalTop; LocalTop = 0; }
     if(LocalLeft + SelWidth > MonWidth) SelWidth = MonWidth - LocalLeft;
     if(LocalTop + SelHeight > MonHeight) SelHeight = MonHeight - LocalTop;
-    if(SelWidth <= 0 || SelHeight <= 0) return(0);
+    if(SelWidth <= 0 || SelHeight <= 0) return(Result);
 
-    // If no annotations, use fast path
-    if(!S || S->LineCount == 0) {
-        ID3D11Texture2D *Staging = GetCachedStagingTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
-        if(!Staging) return(0);
-
-        D3D11_BOX SrcBox = {};
-        SrcBox.left = (UINT)LocalLeft;
-        SrcBox.top = (UINT)LocalTop;
-        SrcBox.front = 0;
-        SrcBox.right = (UINT)(LocalLeft + SelWidth);
-        SrcBox.bottom = (UINT)(LocalTop + SelHeight);
-        SrcBox.back = 1;
-
-        R->Context->CopySubresourceRegion(Staging, 0, 0, 0, 0, Mon->Texture, 0, &SrcBox);
-
-        D3D11_MAPPED_SUBRESOURCE Mapped;
-        HRESULT hr = R->Context->Map(Staging, 0, D3D11_MAP_READ, 0, &Mapped);
-
-        int Result = 0;
-        if(SUCCEEDED(hr)) {
-            Result = CopyPixelsToClipboard(Mapped.pData, (uint32_t)SelWidth, (uint32_t)SelHeight, Mapped.RowPitch);
-            R->Context->Unmap(Staging, 0);
-        }
-
-        return(Result);
-    }
-
-    // With annotations: render to intermediate texture
-    ID3D11Texture2D *RenderTexture = GetCachedRenderTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
-    if(!RenderTexture || !R->CachedRTV) return(0);
-
-    // Copy desktop region first
     D3D11_BOX SrcBox = {};
     SrcBox.left = (UINT)LocalLeft;
     SrcBox.top = (UINT)LocalTop;
@@ -335,142 +311,75 @@ static int CopySelectionToClipboard(betterss_renderer *R, capture_state *C, RECT
     SrcBox.bottom = (UINT)(LocalTop + SelHeight);
     SrcBox.back = 1;
 
-    R->Context->CopySubresourceRegion(RenderTexture, 0, 0, 0, 0, Mon->Texture, 0, &SrcBox);
+    int HasAnnotations = S && S->LineCount > 0;
 
-    // Render annotations on top
-    R->Context->OMSetRenderTargets(1, &R->CachedRTV, 0);
-    
-    D3D11_VIEWPORT Viewport = {};
-    Viewport.Width = (float)SelWidth;
-    Viewport.Height = (float)SelHeight;
-    Viewport.MaxDepth = 1.0f;
-    R->Context->RSSetViewports(1, &Viewport);
-    
-    RenderAnnotationLines(R, S, -Selection.left, -Selection.top, SelWidth, SelHeight);
+    if(HasAnnotations) {
+        ID3D11Texture2D *RenderTexture = GetCachedRenderTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
+        if(!RenderTexture || !R->CachedRTV) return(Result);
 
-    ID3D11RenderTargetView *NullRTV = 0;
-    R->Context->OMSetRenderTargets(1, &NullRTV, 0);
+        R->Context->CopySubresourceRegion(RenderTexture, 0, 0, 0, 0, Mon->Texture, 0, &SrcBox);
+
+        R->Context->OMSetRenderTargets(1, &R->CachedRTV, 0);
+
+        D3D11_VIEWPORT Viewport = {};
+        Viewport.Width = (float)SelWidth;
+        Viewport.Height = (float)SelHeight;
+        Viewport.MaxDepth = 1.0f;
+        R->Context->RSSetViewports(1, &Viewport);
+
+        RenderAnnotationLines(R, S, -Selection.left, -Selection.top, SelWidth, SelHeight);
+
+        ID3D11RenderTargetView *NullRTV = 0;
+        R->Context->OMSetRenderTargets(1, &NullRTV, 0);
+
+        SrcBox.left = 0;
+        SrcBox.top = 0;
+        SrcBox.right = (UINT)SelWidth;
+        SrcBox.bottom = (UINT)SelHeight;
+    }
 
     ID3D11Texture2D *Staging = GetCachedStagingTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
-    if(!Staging) return(0);
+    if(!Staging) return(Result);
 
-    D3D11_BOX RenderBox = {};
-    RenderBox.right = (UINT)SelWidth;
-    RenderBox.bottom = (UINT)SelHeight;
-    RenderBox.back = 1;
-    R->Context->CopySubresourceRegion(Staging, 0, 0, 0, 0, RenderTexture, 0, &RenderBox);
+    ID3D11Texture2D *CopySrc = HasAnnotations ? R->CachedRenderTexture : Mon->Texture;
+    R->Context->CopySubresourceRegion(Staging, 0, 0, 0, 0, CopySrc, 0, &SrcBox);
 
     D3D11_MAPPED_SUBRESOURCE Mapped;
-    HRESULT hr = R->Context->Map(Staging, 0, D3D11_MAP_READ, 0, &Mapped);
-
-    int Result = 0;
-    if(SUCCEEDED(hr)) {
-        Result = CopyPixelsToClipboard(Mapped.pData, (uint32_t)SelWidth, (uint32_t)SelHeight, Mapped.RowPitch);
-        R->Context->Unmap(Staging, 0);
+    if(SUCCEEDED(R->Context->Map(Staging, 0, D3D11_MAP_READ, 0, &Mapped))) {
+        Result.Data = Mapped.pData;
+        Result.Width = (uint32_t)SelWidth;
+        Result.Height = (uint32_t)SelHeight;
+        Result.Pitch = Mapped.RowPitch;
+        Result.Staging = Staging;
+        Result.Renderer = R;
     }
 
     return(Result);
 }
 
-static int SaveSelectionToFile(betterss_renderer *R, capture_state *C, RECT Selection, const wchar_t *Filename, selection_state *S) {
-    if(!R || !R->Device || !R->Context || !C) return(0);
-    
-    monitor_duplication *Mon = 0;
-    if(!FindMonitorForRect(C, Selection, &Mon)) {
-        return(0);
+static void ReleaseResolvedPixels(resolved_pixels *P) {
+    if(P->Data) {
+        P->Renderer->Context->Unmap(P->Staging, 0);
+        P->Data = 0;
     }
+}
 
-    int SelWidth = Selection.right - Selection.left;
-    int SelHeight = Selection.bottom - Selection.top;
-    if(SelWidth <= 0 || SelHeight <= 0) return(0);
-
-    int VirtLeft = Selection.left + C->VirtualScreen.left;
-    int VirtTop = Selection.top + C->VirtualScreen.top;
-    int LocalLeft = VirtLeft - Mon->Bounds.left;
-    int LocalTop = VirtTop - Mon->Bounds.top;
-
-    int MonWidth = Mon->Bounds.right - Mon->Bounds.left;
-    int MonHeight = Mon->Bounds.bottom - Mon->Bounds.top;
-
-    if(LocalLeft < 0) { SelWidth += LocalLeft; LocalLeft = 0; }
-    if(LocalTop < 0) { SelHeight += LocalTop; LocalTop = 0; }
-    if(LocalLeft + SelWidth > MonWidth) SelWidth = MonWidth - LocalLeft;
-    if(LocalTop + SelHeight > MonHeight) SelHeight = MonHeight - LocalTop;
-    if(SelWidth <= 0 || SelHeight <= 0) return(0);
-
-    // If no annotations, use fast path
-    if(!S || S->LineCount == 0) {
-        ID3D11Texture2D *Staging = GetCachedStagingTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
-        if(!Staging) return(0);
-
-        D3D11_BOX SrcBox = {};
-        SrcBox.left = (UINT)LocalLeft;
-        SrcBox.top = (UINT)LocalTop;
-        SrcBox.front = 0;
-        SrcBox.right = (UINT)(LocalLeft + SelWidth);
-        SrcBox.bottom = (UINT)(LocalTop + SelHeight);
-        SrcBox.back = 1;
-
-        R->Context->CopySubresourceRegion(Staging, 0, 0, 0, 0, Mon->Texture, 0, &SrcBox);
-
-        D3D11_MAPPED_SUBRESOURCE Mapped;
-        HRESULT hr = R->Context->Map(Staging, 0, D3D11_MAP_READ, 0, &Mapped);
-
-        int Result = 0;
-        if(SUCCEEDED(hr)) {
-            Result = SavePixelsToFile(Mapped.pData, (uint32_t)SelWidth, (uint32_t)SelHeight, Mapped.RowPitch, Filename);
-            R->Context->Unmap(Staging, 0);
-        }
-
-        return(Result);
-    }
-
-    // With annotations: render to intermediate texture
-    ID3D11Texture2D *RenderTexture = GetCachedRenderTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
-    if(!RenderTexture || !R->CachedRTV) return(0);
-
-    // Copy desktop region first
-    D3D11_BOX SrcBox = {};
-    SrcBox.left = (UINT)LocalLeft;
-    SrcBox.top = (UINT)LocalTop;
-    SrcBox.front = 0;
-    SrcBox.right = (UINT)(LocalLeft + SelWidth);
-    SrcBox.bottom = (UINT)(LocalTop + SelHeight);
-    SrcBox.back = 1;
-
-    R->Context->CopySubresourceRegion(RenderTexture, 0, 0, 0, 0, Mon->Texture, 0, &SrcBox);
-
-    // Render annotations on top
-    R->Context->OMSetRenderTargets(1, &R->CachedRTV, 0);
-    
-    D3D11_VIEWPORT Viewport = {};
-    Viewport.Width = (float)SelWidth;
-    Viewport.Height = (float)SelHeight;
-    Viewport.MaxDepth = 1.0f;
-    R->Context->RSSetViewports(1, &Viewport);
-    
-    RenderAnnotationLines(R, S, -Selection.left, -Selection.top, SelWidth, SelHeight);
-
-    ID3D11RenderTargetView *NullRTV = 0;
-    R->Context->OMSetRenderTargets(1, &NullRTV, 0);
-
-    ID3D11Texture2D *Staging = GetCachedStagingTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
-    if(!Staging) return(0);
-
-    D3D11_BOX RenderBox = {};
-    RenderBox.right = (UINT)SelWidth;
-    RenderBox.bottom = (UINT)SelHeight;
-    RenderBox.back = 1;
-    R->Context->CopySubresourceRegion(Staging, 0, 0, 0, 0, RenderTexture, 0, &RenderBox);
-
-    D3D11_MAPPED_SUBRESOURCE Mapped;
-    HRESULT hr = R->Context->Map(Staging, 0, D3D11_MAP_READ, 0, &Mapped);
-
+static int CopySelectionToClipboard(betterss_renderer *R, capture_state *C, RECT Selection, selection_state *S) {
+    resolved_pixels Pixels = ResolveSelectionPixels(R, C, Selection, S);
     int Result = 0;
-    if(SUCCEEDED(hr)) {
-        Result = SavePixelsToFile(Mapped.pData, (uint32_t)SelWidth, (uint32_t)SelHeight, Mapped.RowPitch, Filename);
-        R->Context->Unmap(Staging, 0);
+    if(Pixels.Data) {
+        Result = CopyPixelsToClipboard(Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch);
     }
+    ReleaseResolvedPixels(&Pixels);
+    return(Result);
+}
 
+static int SaveSelectionToFile(betterss_renderer *R, capture_state *C, RECT Selection, const wchar_t *Filename, selection_state *S) {
+    resolved_pixels Pixels = ResolveSelectionPixels(R, C, Selection, S);
+    int Result = 0;
+    if(Pixels.Data) {
+        Result = SavePixelsToFile(Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch, Filename);
+    }
+    ReleaseResolvedPixels(&Pixels);
     return(Result);
 }
