@@ -43,6 +43,11 @@ static inline void ArenaReset(memory_arena *Arena) {
     Arena->Used = 0;
 }
 
+struct hotkey_binding {
+    UINT Mods;
+    UINT VK;
+};
+
 struct betterss_state
 {
     HWND Window;
@@ -52,14 +57,10 @@ struct betterss_state
     int IsCapturing;
     
     memory_arena CaptureArena;
-    
-    // settings
-    UINT HotkeyMods;
-    UINT HotkeyVK;
-    UINT SaveHotkeyMods;
-    UINT SaveHotkeyVK;
-    
-    // internal
+
+    hotkey_binding CaptureHotkey;
+    hotkey_binding SaveHotkey;
+
     NOTIFYICONDATAW TrayIcon;
     HHOOK KeyboardHook;
     HWND HotkeyDialog;

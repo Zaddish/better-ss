@@ -102,44 +102,32 @@ static void PreventWindowsDPIScaling(void) {
     }
 }
 
-// settings persistence
 static void SaveSettings(betterss_state *State) {
     HKEY Key;
     if(RegCreateKeyExW(HKEY_CURRENT_USER, RegistryKeyPath, 0, 0, 0, KEY_WRITE, 0, &Key, 0) == ERROR_SUCCESS) {
-        RegSetValueExW(Key, L"HotkeyMods", 0, REG_DWORD, (BYTE*)&State->HotkeyMods, sizeof(State->HotkeyMods));
-        RegSetValueExW(Key, L"HotkeyVK", 0, REG_DWORD, (BYTE*)&State->HotkeyVK, sizeof(State->HotkeyVK));
-        RegSetValueExW(Key, L"SaveHotkeyMods", 0, REG_DWORD, (BYTE*)&State->SaveHotkeyMods, sizeof(State->SaveHotkeyMods));
-        RegSetValueExW(Key, L"SaveHotkeyVK", 0, REG_DWORD, (BYTE*)&State->SaveHotkeyVK, sizeof(State->SaveHotkeyVK));
+        RegSetValueExW(Key, L"CaptureHotkey", 0, REG_BINARY, (BYTE *)&State->CaptureHotkey, sizeof(hotkey_binding));
+        RegSetValueExW(Key, L"SaveHotkey", 0, REG_BINARY, (BYTE *)&State->SaveHotkey, sizeof(hotkey_binding));
         RegCloseKey(Key);
     }
 }
 
 static void LoadSettings(betterss_state *State) {
     HKEY Key;
+    int Loaded = 0;
     if(RegOpenKeyExW(HKEY_CURRENT_USER, RegistryKeyPath, 0, KEY_READ, &Key) == ERROR_SUCCESS) {
-        DWORD Size = sizeof(State->HotkeyMods);
-        RegQueryValueExW(Key, L"HotkeyMods", 0, 0, (BYTE*)&State->HotkeyMods, &Size);
-        Size = sizeof(State->HotkeyVK);
-        RegQueryValueExW(Key, L"HotkeyVK", 0, 0, (BYTE*)&State->HotkeyVK, &Size);
-        
-        Size = sizeof(State->SaveHotkeyMods);
-        if(RegQueryValueExW(Key, L"SaveHotkeyMods", 0, 0, (BYTE*)&State->SaveHotkeyMods, &Size) != ERROR_SUCCESS) {
-             State->SaveHotkeyMods = MOD_CONTROL | MOD_SHIFT | MOD_ALT;
-             State->SaveHotkeyVK = 'S';
-        }
-        else {
-             Size = sizeof(State->SaveHotkeyVK);
-             RegQueryValueExW(Key, L"SaveHotkeyVK", 0, 0, (BYTE*)&State->SaveHotkeyVK, &Size);
-        }
-        
+        DWORD Size = sizeof(hotkey_binding);
+        int a = (RegQueryValueExW(Key, L"CaptureHotkey", 0, 0, (BYTE *)&State->CaptureHotkey, &Size) == ERROR_SUCCESS);
+        Size = sizeof(hotkey_binding);
+        int b = (RegQueryValueExW(Key, L"SaveHotkey", 0, 0, (BYTE *)&State->SaveHotkey, &Size) == ERROR_SUCCESS);
+        Loaded = a && b;
         RegCloseKey(Key);
     }
-    else {
-        // default settings
-        State->HotkeyMods = MOD_CONTROL | MOD_SHIFT;
-        State->HotkeyVK = 'S';
-        State->SaveHotkeyMods = MOD_CONTROL | MOD_SHIFT | MOD_ALT;
-        State->SaveHotkeyVK = 'S';
+
+    if(!Loaded) {
+        State->CaptureHotkey.Mods = MOD_CONTROL | MOD_SHIFT;
+        State->CaptureHotkey.VK = 'S';
+        State->SaveHotkey.Mods = MOD_CONTROL | MOD_SHIFT | MOD_ALT;
+        State->SaveHotkey.VK = 'S';
     }
 }
 
@@ -170,93 +158,93 @@ static void SetStartupEnabled(int Enable) {
     }
 }
 
-static void GetHotkeyString(betterss_state *State, wchar_t *Buffer, int BufferLen, int IsSaveHotkey) {
+static void GetHotkeyString(hotkey_binding *H, wchar_t *Buffer, int BufferLen) {
     Buffer[0] = 0;
-    UINT Mods = IsSaveHotkey ? State->SaveHotkeyMods : State->HotkeyMods;
-    UINT VK = IsSaveHotkey ? State->SaveHotkeyVK : State->HotkeyVK;
+    if(H->Mods & MOD_CONTROL) wcscat_internal(Buffer, BufferLen, L"Ctrl+");
+    if(H->Mods & MOD_SHIFT) wcscat_internal(Buffer, BufferLen, L"Shift+");
+    if(H->Mods & MOD_ALT) wcscat_internal(Buffer, BufferLen, L"Alt+");
+    if(H->Mods & MOD_WIN) wcscat_internal(Buffer, BufferLen, L"Win+");
 
-    if(Mods & MOD_CONTROL) wcscat_internal(Buffer, BufferLen, L"Ctrl+");
-    if(Mods & MOD_SHIFT) wcscat_internal(Buffer, BufferLen, L"Shift+");
-    if(Mods & MOD_ALT) wcscat_internal(Buffer, BufferLen, L"Alt+");
-    if(Mods & MOD_WIN) wcscat_internal(Buffer, BufferLen, L"Win+");
-    
     wchar_t KeyName[32] = {};
-    UINT ScanCode = MapVirtualKeyW(VK, MAPVK_VK_TO_VSC);
+    UINT ScanCode = MapVirtualKeyW(H->VK, MAPVK_VK_TO_VSC);
     GetKeyNameTextW(ScanCode << 16, KeyName, 32);
     if(KeyName[0]) wcscat_internal(Buffer, BufferLen, KeyName);
 }
 
-static LRESULT CALLBACK LowLevelKeyboardProc(int Code, WPARAM WParam, LPARAM LParam) {
-    if(Code >= 0 && WParam == WM_KEYDOWN) {
-        KBDLLHOOKSTRUCT *Kbd = (KBDLLHOOKSTRUCT *)LParam;
-        UINT VK = Kbd->vkCode;
-        
-        if(g_HookTargetWindow) {
-            betterss_state *State = (betterss_state *)GetWindowLongPtrW(g_HookTargetWindow, GWLP_USERDATA);
-            if(State) {
-                if(State->IsCapturingHotkey && State->HotkeyDialog) {
-                    if(VK == VK_CONTROL || VK == VK_SHIFT || VK == VK_MENU || VK == VK_LWIN || VK == VK_RWIN ||
-                       VK == VK_LCONTROL || VK == VK_RCONTROL || VK == VK_LSHIFT || VK == VK_RSHIFT ||
-                       VK == VK_LMENU || VK == VK_RMENU) {
-                        return(CallNextHookEx(State->KeyboardHook, Code, WParam, LParam));
-                    }
-                    
-                    UINT Mods = 0;
-                    if(GetKeyState(VK_CONTROL) & 0x8000) Mods |= MOD_CONTROL;
-                    if(GetKeyState(VK_SHIFT) & 0x8000) Mods |= MOD_SHIFT;
-                    if(GetKeyState(VK_MENU) & 0x8000) Mods |= MOD_ALT;
-                    if((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) Mods |= MOD_WIN;
-                    
-                    if(State->ConfiguringSaveHotkey) {
-                        State->SaveHotkeyMods = Mods;
-                        State->SaveHotkeyVK = VK;
-                    }
-                    else {
-                        State->HotkeyMods = Mods;
-                        State->HotkeyVK = VK;
-                    }
-                    
-                    SaveSettings(State);
-                    RegisterCurrentHotkey(State);
-                    UpdateTrayTip(State);
-                    
-                    DestroyWindow(State->HotkeyDialog);
-                    State->HotkeyDialog = 0;
-                    State->IsCapturingHotkey = 0;
-                    State->ConfiguringSaveHotkey = 0;
-                    
-                    return(1);
-                }
-                
-                UINT CurrentMods = 0;
-                if(GetKeyState(VK_CONTROL) & 0x8000) CurrentMods |= MOD_CONTROL;
-                if(GetKeyState(VK_SHIFT) & 0x8000) CurrentMods |= MOD_SHIFT;
-                if(GetKeyState(VK_MENU) & 0x8000) CurrentMods |= MOD_ALT;
-                if((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) CurrentMods |= MOD_WIN;
+static int IsModifierVK(UINT VK) {
+    return(VK == VK_CONTROL || VK == VK_LCONTROL || VK == VK_RCONTROL ||
+           VK == VK_SHIFT || VK == VK_LSHIFT || VK == VK_RSHIFT ||
+           VK == VK_MENU || VK == VK_LMENU || VK == VK_RMENU ||
+           VK == VK_LWIN || VK == VK_RWIN);
+}
 
-                if(State->IsCapturing && VK == VK_ESCAPE) {
-                    PostMessageW(State->Window, WM_KEYDOWN, VK_ESCAPE, 0);
-                    return(1);
-                }
-                
-                if(!State->IsCapturing && !State->IsCapturingHotkey) {
-                    if(VK == State->HotkeyVK && CurrentMods == State->HotkeyMods) {
-                        State->CaptureMode = 0;
-                        PostMessageW(State->Window, WM_HOTKEY, HOTKEY_ID, 0);
-                        return(1);
-                    }
-                    else if(VK == State->SaveHotkeyVK && CurrentMods == State->SaveHotkeyMods) {
-                        State->CaptureMode = 1;
-                        PostMessageW(State->Window, WM_HOTKEY, HOTKEY_ID, 0);
-                        return(1);
-                    }
-                }
-                
-                return(CallNextHookEx(State->KeyboardHook, Code, WParam, LParam));
-            }
+static UINT GetCurrentMods(void) {
+    UINT Mods = 0;
+    if(GetKeyState(VK_CONTROL) & 0x8000) Mods |= MOD_CONTROL;
+    if(GetKeyState(VK_SHIFT) & 0x8000) Mods |= MOD_SHIFT;
+    if(GetKeyState(VK_MENU) & 0x8000) Mods |= MOD_ALT;
+    if((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) Mods |= MOD_WIN;
+    return Mods;
+}
+
+static int HotkeyMatches(hotkey_binding *H, UINT VK, UINT Mods) {
+    return(VK == H->VK && Mods == H->Mods);
+}
+
+static LRESULT CALLBACK LowLevelKeyboardProc(int Code, WPARAM WParam, LPARAM LParam) {
+    if(Code < 0) return(CallNextHookEx(0, Code, WParam, LParam));
+    if(!g_HookTargetWindow) return(CallNextHookEx(0, Code, WParam, LParam));
+
+    betterss_state *State = (betterss_state *)GetWindowLongPtrW(g_HookTargetWindow, GWLP_USERDATA);
+    if(!State) return(CallNextHookEx(0, Code, WParam, LParam));
+
+    if(WParam != WM_KEYDOWN && WParam != WM_SYSKEYDOWN) {
+        return(CallNextHookEx(State->KeyboardHook, Code, WParam, LParam));
+    }
+
+    KBDLLHOOKSTRUCT *Kbd = (KBDLLHOOKSTRUCT *)LParam;
+    UINT VK = Kbd->vkCode;
+
+    if(IsModifierVK(VK)) {
+        return(CallNextHookEx(State->KeyboardHook, Code, WParam, LParam));
+    }
+
+    if(State->IsCapturingHotkey && State->HotkeyDialog) {
+        hotkey_binding *Target = State->ConfiguringSaveHotkey ? &State->SaveHotkey : &State->CaptureHotkey;
+        Target->Mods = GetCurrentMods();
+        Target->VK = VK;
+
+        SaveSettings(State);
+        RegisterCurrentHotkey(State);
+        UpdateTrayTip(State);
+
+        DestroyWindow(State->HotkeyDialog);
+        State->HotkeyDialog = 0;
+        State->IsCapturingHotkey = 0;
+        State->ConfiguringSaveHotkey = 0;
+        return(1);
+    }
+
+    if(State->IsCapturing && VK == VK_ESCAPE) {
+        PostMessageW(State->Window, WM_KEYDOWN, VK_ESCAPE, 0);
+        return(1);
+    }
+
+    if(!State->IsCapturing && !State->IsCapturingHotkey) {
+        UINT Mods = GetCurrentMods();
+        if(HotkeyMatches(&State->CaptureHotkey, VK, Mods)) {
+            State->CaptureMode = 0;
+            PostMessageW(State->Window, WM_HOTKEY, HOTKEY_ID, 0);
+            return(1);
+        }
+        if(HotkeyMatches(&State->SaveHotkey, VK, Mods)) {
+            State->CaptureMode = 1;
+            PostMessageW(State->Window, WM_HOTKEY, HOTKEY_ID, 0);
+            return(1);
         }
     }
-    return(CallNextHookEx(0, Code, WParam, LParam));
+
+    return(CallNextHookEx(State->KeyboardHook, Code, WParam, LParam));
 }
 
 static void RegisterCurrentHotkey(betterss_state *State) {
@@ -280,10 +268,10 @@ static void CreateTrayIcon(betterss_state *State, HINSTANCE Instance) {
     
     wchar_t Tip[128] = L"BetterSS\nCapture: ";
     wchar_t HotkeyStr[64];
-    GetHotkeyString(State, HotkeyStr, 64, 0);
+    GetHotkeyString(&State->CaptureHotkey, HotkeyStr, 64);
     wcscat_internal(Tip, 128, HotkeyStr);
     wcscat_internal(Tip, 128, L"\nSave: ");
-    GetHotkeyString(State, HotkeyStr, 64, 1);
+    GetHotkeyString(&State->SaveHotkey, HotkeyStr, 64);
     wcscat_internal(Tip, 128, HotkeyStr);
     wcscpy_internal(State->TrayIcon.szTip, 128, Tip);
     
@@ -293,10 +281,10 @@ static void CreateTrayIcon(betterss_state *State, HINSTANCE Instance) {
 static void UpdateTrayTip(betterss_state *State) {
     wchar_t Tip[128] = L"BetterSS\nCapture: ";
     wchar_t HotkeyStr[64];
-    GetHotkeyString(State, HotkeyStr, 64, 0);
+    GetHotkeyString(&State->CaptureHotkey, HotkeyStr, 64);
     wcscat_internal(Tip, 128, HotkeyStr);
     wcscat_internal(Tip, 128, L"\nSave: ");
-    GetHotkeyString(State, HotkeyStr, 64, 1);
+    GetHotkeyString(&State->SaveHotkey, HotkeyStr, 64);
     wcscat_internal(Tip, 128, HotkeyStr);
     wcscpy_internal(State->TrayIcon.szTip, 128, Tip);
     Shell_NotifyIconW(NIM_MODIFY, &State->TrayIcon);
@@ -310,13 +298,13 @@ static void ShowTrayMenu(betterss_state *State) {
     HMENU Menu = CreatePopupMenu();
     
     wchar_t HotkeyStr[64];
-    GetHotkeyString(State, HotkeyStr, 64, 0);
+    GetHotkeyString(&State->CaptureHotkey, HotkeyStr, 64);
     wchar_t MenuItem[128] = L"Capture Hotkey (";
     wcscat_internal(MenuItem, 128, HotkeyStr);
     wcscat_internal(MenuItem, 128, L")...");
     AppendMenuW(Menu, MF_STRING, IDM_CHANGEHOTKEY, MenuItem);
     
-    GetHotkeyString(State, HotkeyStr, 64, 1);
+    GetHotkeyString(&State->SaveHotkey, HotkeyStr, 64);
     wcscpy_internal(MenuItem, 128, L"Save Hotkey (");
     wcscat_internal(MenuItem, 128, HotkeyStr);
     wcscat_internal(MenuItem, 128, L")...");
