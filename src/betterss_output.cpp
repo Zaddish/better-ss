@@ -5,18 +5,16 @@
 #include <objbase.h>
 #include <tmmintrin.h>
 
-static ID3D11Texture2D *GetCachedStagingTexture(betterss_renderer *R, uint32_t Width, uint32_t Height) {
-    if(R->CachedStagingTexture && 
-       R->CachedStagingWidth >= Width && 
-       R->CachedStagingHeight >= Height) {
-        return R->CachedStagingTexture;
+static ID3D11Texture2D *GetCachedTexture(betterss_renderer *R, betterss_renderer::cached_texture *Cache,
+                                          uint32_t Width, uint32_t Height,
+                                          D3D11_USAGE Usage, UINT BindFlags, UINT CPUAccess) {
+    if(Cache->Texture && Cache->Width >= Width && Cache->Height >= Height) {
+        return Cache->Texture;
     }
-    
-    if(R->CachedStagingTexture) {
-        R->CachedStagingTexture->Release();
-        R->CachedStagingTexture = 0;
-    }
-    
+
+    if(Cache->RTV) { Cache->RTV->Release(); Cache->RTV = 0; }
+    if(Cache->Texture) { Cache->Texture->Release(); Cache->Texture = 0; }
+
     D3D11_TEXTURE2D_DESC Desc = {};
     Desc.Width = Width;
     Desc.Height = Height;
@@ -24,54 +22,21 @@ static ID3D11Texture2D *GetCachedStagingTexture(betterss_renderer *R, uint32_t W
     Desc.ArraySize = 1;
     Desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     Desc.SampleDesc.Count = 1;
-    Desc.Usage = D3D11_USAGE_STAGING;
-    Desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    Desc.Usage = Usage;
+    Desc.BindFlags = BindFlags;
+    Desc.CPUAccessFlags = CPUAccess;
 
-    R->Device->CreateTexture2D(&Desc, 0, &R->CachedStagingTexture);
-    
-    if(R->CachedStagingTexture) {
-        R->CachedStagingWidth = Width;
-        R->CachedStagingHeight = Height;
-    }
-    
-    return R->CachedStagingTexture;
-}
+    R->Device->CreateTexture2D(&Desc, 0, &Cache->Texture);
 
-static ID3D11Texture2D *GetCachedRenderTexture(betterss_renderer *R, uint32_t Width, uint32_t Height) {
-    if(R->CachedRenderTexture && 
-       R->CachedRenderWidth >= Width && 
-       R->CachedRenderHeight >= Height) {
-        return R->CachedRenderTexture;
+    if(Cache->Texture) {
+        if(BindFlags & D3D11_BIND_RENDER_TARGET) {
+            R->Device->CreateRenderTargetView(Cache->Texture, 0, &Cache->RTV);
+        }
+        Cache->Width = Width;
+        Cache->Height = Height;
     }
-    
-    if(R->CachedRTV) {
-        R->CachedRTV->Release();
-        R->CachedRTV = 0;
-    }
-    if(R->CachedRenderTexture) {
-        R->CachedRenderTexture->Release();
-        R->CachedRenderTexture = 0;
-    }
-    
-    D3D11_TEXTURE2D_DESC Desc = {};
-    Desc.Width = Width;
-    Desc.Height = Height;
-    Desc.MipLevels = 1;
-    Desc.ArraySize = 1;
-    Desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    Desc.SampleDesc.Count = 1;
-    Desc.Usage = D3D11_USAGE_DEFAULT;
-    Desc.BindFlags = D3D11_BIND_RENDER_TARGET;
 
-    R->Device->CreateTexture2D(&Desc, 0, &R->CachedRenderTexture);
-    
-    if(R->CachedRenderTexture) {
-        R->Device->CreateRenderTargetView(R->CachedRenderTexture, 0, &R->CachedRTV);
-        R->CachedRenderWidth = Width;
-        R->CachedRenderHeight = Height;
-    }
-    
-    return R->CachedRenderTexture;
+    return Cache->Texture;
 }
 
 static int FindMonitorForRect(capture_state *C, RECT Selection, monitor_duplication **OutMon) {
@@ -314,12 +279,13 @@ static resolved_pixels ResolveSelectionPixels(betterss_renderer *R, capture_stat
     int HasAnnotations = S && S->LineCount > 0;
 
     if(HasAnnotations) {
-        ID3D11Texture2D *RenderTexture = GetCachedRenderTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
-        if(!RenderTexture || !R->CachedRTV) return(Result);
+        ID3D11Texture2D *RenderTexture = GetCachedTexture(R, &R->CachedRender, (uint32_t)SelWidth, (uint32_t)SelHeight,
+            D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0);
+        if(!RenderTexture || !R->CachedRender.RTV) return(Result);
 
         R->Context->CopySubresourceRegion(RenderTexture, 0, 0, 0, 0, Mon->Texture, 0, &SrcBox);
 
-        R->Context->OMSetRenderTargets(1, &R->CachedRTV, 0);
+        R->Context->OMSetRenderTargets(1, &R->CachedRender.RTV, 0);
 
         D3D11_VIEWPORT Viewport = {};
         Viewport.Width = (float)SelWidth;
@@ -338,10 +304,11 @@ static resolved_pixels ResolveSelectionPixels(betterss_renderer *R, capture_stat
         SrcBox.bottom = (UINT)SelHeight;
     }
 
-    ID3D11Texture2D *Staging = GetCachedStagingTexture(R, (uint32_t)SelWidth, (uint32_t)SelHeight);
+    ID3D11Texture2D *Staging = GetCachedTexture(R, &R->CachedStaging, (uint32_t)SelWidth, (uint32_t)SelHeight,
+        D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ);
     if(!Staging) return(Result);
 
-    ID3D11Texture2D *CopySrc = HasAnnotations ? R->CachedRenderTexture : Mon->Texture;
+    ID3D11Texture2D *CopySrc = HasAnnotations ? R->CachedRender.Texture : Mon->Texture;
     R->Context->CopySubresourceRegion(Staging, 0, 0, 0, 0, CopySrc, 0, &SrcBox);
 
     D3D11_MAPPED_SUBRESOURCE Mapped;

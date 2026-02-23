@@ -130,9 +130,9 @@ static void ReleaseRenderer(betterss_renderer *Renderer) {
     if(Renderer->LineVertexBuffer) Renderer->LineVertexBuffer->Release();
     if(Renderer->LineInputLayout) Renderer->LineInputLayout->Release();
     
-    if(Renderer->CachedRTV) Renderer->CachedRTV->Release();
-    if(Renderer->CachedRenderTexture) Renderer->CachedRenderTexture->Release();
-    if(Renderer->CachedStagingTexture) Renderer->CachedStagingTexture->Release();
+    if(Renderer->CachedRender.RTV) Renderer->CachedRender.RTV->Release();
+    if(Renderer->CachedRender.Texture) Renderer->CachedRender.Texture->Release();
+    if(Renderer->CachedStaging.Texture) Renderer->CachedStaging.Texture->Release();
     
     if(Renderer->SwapChain) Renderer->SwapChain->Release();
     if(Renderer->Context1) Renderer->Context1->Release();
