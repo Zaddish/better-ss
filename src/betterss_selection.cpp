@@ -19,10 +19,6 @@ static void SelectionEnd(selection_state *Selection) {
     Selection->IsDragging = 0;
 }
 
-static void SelectionCancel(selection_state *Selection) {
-    SelectionReset(Selection);
-}
-
 static RECT SelectionGetRect(selection_state *Selection) {
     RECT Result;
 
@@ -115,8 +111,3 @@ static void AnnotationUndo(selection_state *Selection) {
     }
 }
 
-static void AnnotationClear(selection_state *Selection) {
-    Selection->LineCount = 0;
-    Selection->IsAnnotating = 0;
-    Selection->CurrentLineIndex = 0;
-}

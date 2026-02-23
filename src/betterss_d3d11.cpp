@@ -17,15 +17,6 @@ static int RendererIsValid(betterss_renderer *Renderer) {
     return(Result);
 }
 
-static void ActivateD3D11DebugInfo(ID3D11Device *Device) {
-    ID3D11InfoQueue *Info;
-    if(SUCCEEDED(Device->QueryInterface(IID_PPV_ARGS(&Info)))) {
-        Info->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-        Info->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, TRUE);
-        Info->Release();
-    }
-}
-
 static IDXGIFactory2 *AcquireDXGIFactory(ID3D11Device *Device) {
     IDXGIFactory2 *Result = 0;
 
@@ -119,7 +110,6 @@ static void RendererResize(betterss_renderer *Renderer, uint32_t Width, uint32_t
 static void ReleaseRenderer(betterss_renderer *Renderer) {
     ReleaseRenderTarget(Renderer);
 
-    if(Renderer->StagingTexture) Renderer->StagingTexture->Release();
     if(Renderer->Sampler) Renderer->Sampler->Release();
     if(Renderer->ConstantBuffer) Renderer->ConstantBuffer->Release();
     if(Renderer->VertexShader) Renderer->VertexShader->Release();
@@ -160,8 +150,6 @@ static betterss_renderer AcquireRenderer(HWND Window) {
         if(SUCCEEDED(Result.Context->QueryInterface(IID_PPV_ARGS(&Result.Context1)))) {
             Result.SwapChain = AcquireSwapChain(Result.Device, Window);
             if(Result.SwapChain) {
-                Result.FrameLatencyWaitable = Result.SwapChain->GetFrameLatencyWaitableObject();
-
                 D3D11_BUFFER_DESC ConstBufferDesc = {};
                 ConstBufferDesc.ByteWidth = sizeof(overlay_const_buffer);
                 ConstBufferDesc.Usage = D3D11_USAGE_DYNAMIC;

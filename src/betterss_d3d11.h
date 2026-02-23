@@ -34,8 +34,6 @@ struct betterss_renderer
     ID3D11PixelShader *OverlayShader;
     ID3D11Buffer *ConstantBuffer;
     ID3D11SamplerState *Sampler;
-    ID3D11Texture2D *StagingTexture;
-    HANDLE FrameLatencyWaitable;
     uint32_t Width;
     uint32_t Height;
     

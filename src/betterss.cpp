@@ -70,7 +70,6 @@ static int RenderOverlay(betterss_state *State);
 static void RegisterCurrentHotkey(betterss_state *State);
 static void UpdateTrayTip(betterss_state *State);
 
-#define HOTKEY_ID 1
 #define WM_TRAYICON (WM_USER + 1)
 #define IDM_QUIT 1001
 #define IDM_STARTUP 1002
@@ -149,7 +148,7 @@ static void SetStartupEnabled(int Enable) {
         if(Enable) {
             wchar_t ExePath[MAX_PATH];
             GetModuleFileNameW(0, ExePath, MAX_PATH);
-            RegSetValueExW(Key, L"BetterSS", 0, REG_SZ, (BYTE*)ExePath, (DWORD)(wcslen(ExePath) + 1) * sizeof(wchar_t));
+            RegSetValueExW(Key, L"BetterSS", 0, REG_SZ, (BYTE*)ExePath, (DWORD)(wcslen_internal(ExePath) + 1) * sizeof(wchar_t));
         }
         else {
             RegDeleteValueW(Key, L"BetterSS");
@@ -217,6 +216,7 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int Code, WPARAM WParam, LPARAM LPa
         SaveSettings(State);
         RegisterCurrentHotkey(State);
         UpdateTrayTip(State);
+        Shell_NotifyIconW(NIM_MODIFY, &State->TrayIcon);
 
         DestroyWindow(State->HotkeyDialog);
         State->HotkeyDialog = 0;
@@ -234,12 +234,12 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int Code, WPARAM WParam, LPARAM LPa
         UINT Mods = GetCurrentMods();
         if(HotkeyMatches(&State->CaptureHotkey, VK, Mods)) {
             State->CaptureMode = 0;
-            PostMessageW(State->Window, WM_HOTKEY, HOTKEY_ID, 0);
+            PostMessageW(State->Window, WM_HOTKEY, 0, 0);
             return(1);
         }
         if(HotkeyMatches(&State->SaveHotkey, VK, Mods)) {
             State->CaptureMode = 1;
-            PostMessageW(State->Window, WM_HOTKEY, HOTKEY_ID, 0);
+            PostMessageW(State->Window, WM_HOTKEY, 0, 0);
             return(1);
         }
     }
@@ -257,27 +257,6 @@ static void RegisterCurrentHotkey(betterss_state *State) {
         GetModuleHandleW(0), 0);
 }
 
-// tray icon
-static void CreateTrayIcon(betterss_state *State, HINSTANCE Instance) {
-    State->TrayIcon.cbSize = sizeof(State->TrayIcon);
-    State->TrayIcon.hWnd = State->Window;
-    State->TrayIcon.uID = 1;
-    State->TrayIcon.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-    State->TrayIcon.uCallbackMessage = WM_TRAYICON;
-    State->TrayIcon.hIcon = LoadIconW(0, MAKEINTRESOURCEW(32512));
-    
-    wchar_t Tip[128] = L"BetterSS\nCapture: ";
-    wchar_t HotkeyStr[64];
-    GetHotkeyString(&State->CaptureHotkey, HotkeyStr, 64);
-    wcscat_internal(Tip, 128, HotkeyStr);
-    wcscat_internal(Tip, 128, L"\nSave: ");
-    GetHotkeyString(&State->SaveHotkey, HotkeyStr, 64);
-    wcscat_internal(Tip, 128, HotkeyStr);
-    wcscpy_internal(State->TrayIcon.szTip, 128, Tip);
-    
-    Shell_NotifyIconW(NIM_ADD, &State->TrayIcon);
-}
-
 static void UpdateTrayTip(betterss_state *State) {
     wchar_t Tip[128] = L"BetterSS\nCapture: ";
     wchar_t HotkeyStr[64];
@@ -287,7 +266,17 @@ static void UpdateTrayTip(betterss_state *State) {
     GetHotkeyString(&State->SaveHotkey, HotkeyStr, 64);
     wcscat_internal(Tip, 128, HotkeyStr);
     wcscpy_internal(State->TrayIcon.szTip, 128, Tip);
-    Shell_NotifyIconW(NIM_MODIFY, &State->TrayIcon);
+}
+
+static void CreateTrayIcon(betterss_state *State, HINSTANCE Instance) {
+    State->TrayIcon.cbSize = sizeof(State->TrayIcon);
+    State->TrayIcon.hWnd = State->Window;
+    State->TrayIcon.uID = 1;
+    State->TrayIcon.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    State->TrayIcon.uCallbackMessage = WM_TRAYICON;
+    State->TrayIcon.hIcon = LoadIconW(0, MAKEINTRESOURCEW(32512));
+    UpdateTrayTip(State);
+    Shell_NotifyIconW(NIM_ADD, &State->TrayIcon);
 }
 
 static void RemoveTrayIcon(betterss_state *State) {
@@ -496,7 +485,6 @@ static void HideOverlay(betterss_state *State) {
     ShowWindow(State->Window, SW_HIDE);
 
     ReleaseAllFrames(State->Capture);
-    AnnotationClear(State->Selection);
     SelectionReset(State->Selection);
 
     SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32512)));
@@ -534,8 +522,6 @@ static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, RECT
 }
 
 static void UpdateOverlayShader(betterss_state *State) {
-    if(!State->Renderer || !State->Selection || !State->Capture) return;
-
     RECT SelectRect = SelectionGetRect(State->Selection);
     RECT DefaultBounds = {0, 0, (LONG)State->Renderer->Width, (LONG)State->Renderer->Height};
     UpdateOverlayConstBuffer(State->Renderer, SelectRect, DefaultBounds, 
@@ -545,7 +531,7 @@ static void UpdateOverlayShader(betterss_state *State) {
 
 static int RenderOverlay(betterss_state *State) {
     betterss_renderer *R = State->Renderer;
-    if(!R || !R->Context || !R->RenderTarget) return(0);
+    if(!R->Context || !R->RenderTarget) return(0);
 
     R->Context->OMSetRenderTargets(1, &R->RenderTarget, 0);
 
@@ -567,14 +553,7 @@ static int RenderOverlay(betterss_state *State) {
     R->Context->PSSetConstantBuffers(0, 1, &R->ConstantBuffer);
     R->Context->PSSetSamplers(0, 1, &R->Sampler);
 
-    if(!State->Capture || !State->Capture->Monitors || State->Capture->MonitorCount == 0) {
-        return RendererPresent(R);
-    }
-
-    RECT SelectRect = {0};
-    if(State->Selection) {
-        SelectRect = SelectionGetRect(State->Selection);
-    }
+    RECT SelectRect = SelectionGetRect(State->Selection);
 
     int VirtLeft = State->Capture->VirtualScreen.left;
     int VirtTop = State->Capture->VirtualScreen.top;
@@ -664,7 +643,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
         } break;
 
         case WM_LBUTTONDOWN: {
-            if(State->IsCapturing && State->Selection && !State->Selection->IsAnnotating) {
+            if(State->IsCapturing && !State->Selection->IsAnnotating) {
                 int X = (short)LOWORD(LParam);
                 int Y = (short)HIWORD(LParam);
                 SelectionBegin(State->Selection, X, Y);
@@ -672,7 +651,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
         } break;
 
         case WM_MOUSEMOVE: {
-            if(State->IsCapturing && State->Selection) {
+            if(State->IsCapturing) {
                 int X = (short)LOWORD(LParam);
                 int Y = (short)HIWORD(LParam);
                 
@@ -689,7 +668,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
         } break;
 
         case WM_LBUTTONUP: {
-            if(State->IsCapturing && State->Selection && State->Selection->IsDragging) {
+            if(State->IsCapturing && State->Selection->IsDragging) {
                 SelectionEnd(State->Selection);
                 RECT SelectRect = SelectionGetRect(State->Selection);
                 if((SelectRect.right - SelectRect.left) > 1 && 
@@ -723,7 +702,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
         } break;
 
         case WM_RBUTTONDOWN: {
-            if(State->IsCapturing && State->Selection) {
+            if(State->IsCapturing) {
                 int X = (short)LOWORD(LParam);
                 int Y = (short)HIWORD(LParam);
                 AnnotationBegin(State->Selection, &State->CaptureArena, X, Y);
@@ -732,14 +711,14 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
         } break;
 
         case WM_RBUTTONUP: {
-            if(State->IsCapturing && State->Selection && State->Selection->IsAnnotating) {
+            if(State->IsCapturing && State->Selection->IsAnnotating) {
                 AnnotationEnd(State->Selection);
                 SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32515)));
             }
         } break;
 
         case WM_MBUTTONDOWN: {
-            if(State->IsCapturing && State->Selection) {
+            if(State->IsCapturing) {
                 AnnotationUndo(State->Selection);
                 if(!RenderOverlay(State)) { HideOverlay(State); }
             }
@@ -747,7 +726,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 
         case WM_SETCURSOR: {
             if(State->IsCapturing) {
-                if(State->Selection && State->Selection->IsAnnotating) {
+                if(State->Selection->IsAnnotating) {
                     SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32516)));
                 }
                 else {
@@ -760,7 +739,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
         case WM_KEYDOWN: {
             if(State->IsCapturing) {
                 if(WParam == VK_ESCAPE) {
-                    SelectionCancel(State->Selection);
+                    SelectionReset(State->Selection);
                     HideOverlay(State);
                 }
                 else if(WParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) {
@@ -787,16 +766,19 @@ void WinMainCRTStartup(void) {
     CoInitializeEx(0, COINIT_APARTMENTTHREADED);
     PreventWindowsDPIScaling();
     
-    // Allocate state
-    betterss_state *State = (betterss_state *)VirtualAlloc(0, sizeof(betterss_state), 
-        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if(!State) ExitProcess(1);
-    
+    size_t StateBlockSize = sizeof(betterss_state) + sizeof(betterss_renderer) + sizeof(capture_state) + sizeof(selection_state);
+    uint8_t *StateBlock = (uint8_t *)VirtualAlloc(0, StateBlockSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if(!StateBlock) ExitProcess(1);
+
+    betterss_state *State = (betterss_state *)StateBlock;
+    State->Renderer = (betterss_renderer *)(StateBlock + sizeof(betterss_state));
+    State->Capture = (capture_state *)(StateBlock + sizeof(betterss_state) + sizeof(betterss_renderer));
+    State->Selection = (selection_state *)(StateBlock + sizeof(betterss_state) + sizeof(betterss_renderer) + sizeof(capture_state));
+
     size_t ArenaSize = 16 * 1024 * 1024;
     State->CaptureArena.Memory = (uint8_t *)VirtualAlloc(0, ArenaSize,
         MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     State->CaptureArena.Size = ArenaSize;
-    State->CaptureArena.Used = 0;
     if(!State->CaptureArena.Memory) ExitProcess(1);
     
     LoadSettings(State);
@@ -807,13 +789,6 @@ void WinMainCRTStartup(void) {
 
     State->Window = Window;
     g_HookTargetWindow = Window;
-
-    State->Renderer = (betterss_renderer *)VirtualAlloc(0, sizeof(betterss_renderer), 
-        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    State->Capture = (capture_state *)VirtualAlloc(0, sizeof(capture_state), 
-        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    State->Selection = (selection_state *)VirtualAlloc(0, sizeof(selection_state), 
-        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
     *State->Renderer = AcquireRenderer(Window);
     if(!RendererIsValid(State->Renderer)) ExitProcess(2);
