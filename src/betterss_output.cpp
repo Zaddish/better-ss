@@ -142,96 +142,58 @@ static int CopyPixelsToClipboard(void *Pixels, uint32_t Width, uint32_t Height, 
 }
 
 static int SavePixelsToFile(void *Pixels, uint32_t Width, uint32_t Height, uint32_t Pitch, const wchar_t *Filename) {
-    IWICImagingFactory *Factory = 0;
-    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, 0, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&Factory));
-    if(FAILED(hr)) return(0);
+    int Result = 0;
 
+    IWICImagingFactory *Factory = 0;
     IWICStream *Stream = 0;
+    IWICBitmapEncoder *Encoder = 0;
+    IWICBitmapFrameEncode *FrameEncoder = 0;
+
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, 0, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&Factory));
+    if(FAILED(hr)) goto done;
+
     hr = Factory->CreateStream(&Stream);
-    if(FAILED(hr)) {
-        Factory->Release();
-        return(0);
-    }
+    if(FAILED(hr)) goto done;
 
     hr = Stream->InitializeFromFilename(Filename, GENERIC_WRITE);
-    if(FAILED(hr)) {
-        Stream->Release();
-        Factory->Release();
-        return(0);
-    }
+    if(FAILED(hr)) goto done;
 
-    IWICBitmapEncoder *Encoder = 0;
     hr = Factory->CreateEncoder(GUID_ContainerFormatPng, 0, &Encoder);
-    if(FAILED(hr)) {
-        Stream->Release();
-        Factory->Release();
-        return(0);
-    }
+    if(FAILED(hr)) goto done;
 
     hr = Encoder->Initialize((IStream*)Stream, WICBitmapEncoderNoCache);
-    if(FAILED(hr)) {
-        Encoder->Release();
-        Stream->Release();
-        Factory->Release();
-        return(0);
-    }
+    if(FAILED(hr)) goto done;
 
-    IWICBitmapFrameEncode *FrameEncoder = 0;
-    IPropertyBag2 *Props = 0;
-    hr = Encoder->CreateNewFrame(&FrameEncoder, &Props);
-    if(FAILED(hr)) {
-        Encoder->Release();
-        Stream->Release();
-        Factory->Release();
-        return(0);
+    {
+        IPropertyBag2 *Props = 0;
+        hr = Encoder->CreateNewFrame(&FrameEncoder, &Props);
+        if(Props) Props->Release();
+        if(FAILED(hr)) goto done;
     }
-
-    if(Props) Props->Release();
 
     hr = FrameEncoder->Initialize(0);
-    if(FAILED(hr)) {
-        FrameEncoder->Release();
-        Encoder->Release();
-        Stream->Release();
-        Factory->Release();
-        return(0);
-    }
+    if(FAILED(hr)) goto done;
 
     hr = FrameEncoder->SetSize(Width, Height);
-    if(FAILED(hr)) {
-        FrameEncoder->Release();
-        Encoder->Release();
-        Stream->Release();
-        Factory->Release();
-        return(0);
+    if(FAILED(hr)) goto done;
+
+    {
+        WICPixelFormatGUID Format = GUID_WICPixelFormat32bppBGRA;
+        hr = FrameEncoder->SetPixelFormat(&Format);
+        if(FAILED(hr)) goto done;
     }
 
-    WICPixelFormatGUID Format = GUID_WICPixelFormat32bppBGRA;
-    hr = FrameEncoder->SetPixelFormat(&Format);
-    if(FAILED(hr)) {
-        FrameEncoder->Release();
-        Encoder->Release();
-        Stream->Release();
-        Factory->Release();
-        return(0);
-    }
+    hr = FrameEncoder->WritePixels(Height, Pitch, Height * Pitch, (uint8_t *)Pixels);
+    if(SUCCEEDED(hr)) hr = FrameEncoder->Commit();
+    if(SUCCEEDED(hr)) hr = Encoder->Commit();
+    if(SUCCEEDED(hr)) Result = 1;
 
-    uint8_t *Src = (uint8_t *)Pixels;
-    hr = FrameEncoder->WritePixels(Height, Pitch, Height * Pitch, Src);
-
-    if(SUCCEEDED(hr)) {
-        hr = FrameEncoder->Commit();
-    }
-    if(SUCCEEDED(hr)) {
-        hr = Encoder->Commit();
-    }
-
-    FrameEncoder->Release();
-    Encoder->Release();
-    Stream->Release();
-    Factory->Release();
-
-    return(SUCCEEDED(hr) ? 1 : 0);
+done:
+    if(FrameEncoder) FrameEncoder->Release();
+    if(Encoder) Encoder->Release();
+    if(Stream) Stream->Release();
+    if(Factory) Factory->Release();
+    return(Result);
 }
 
 struct resolved_pixels {
