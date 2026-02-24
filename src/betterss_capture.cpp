@@ -135,11 +135,20 @@ static int CaptureMonitor(monitor_duplication *Mon, ID3D11Device *Device, UINT T
     IDXGIResource *Resource = 0;
     DXGI_OUTDUPL_FRAME_INFO FrameInfo;
 
-    HRESULT hr = Mon->Duplication->AcquireNextFrame(TimeoutMs, &FrameInfo, &Resource);
+    for(int Attempt = 0; Attempt < 4; Attempt++) {
+        HRESULT hr = Mon->Duplication->AcquireNextFrame(TimeoutMs, &FrameInfo, &Resource);
 
-    if(hr == DXGI_ERROR_WAIT_TIMEOUT) { return(0); }
+        if(hr == DXGI_ERROR_WAIT_TIMEOUT) { return(0); }
+        if(hr == DXGI_ERROR_ACCESS_LOST) { return(-1); }
+        if(FAILED(hr)) { return(0); }
 
-    if(SUCCEEDED(hr)) {
+        if(FrameInfo.LastPresentTime.QuadPart == 0) {
+            Resource->Release();
+            Mon->Duplication->ReleaseFrame();
+            Resource = 0;
+            continue;
+        }
+
         hr = Resource->QueryInterface(IID_PPV_ARGS(&Mon->Texture));
         Resource->Release();
 
@@ -159,9 +168,8 @@ static int CaptureMonitor(monitor_duplication *Mon, ID3D11Device *Device, UINT T
             Mon->Texture = 0;
             Mon->Duplication->ReleaseFrame();
         }
-    }
-    else if(hr == DXGI_ERROR_ACCESS_LOST) {
-        return(-1); // Signal lost access
+
+        return(0);
     }
 
     return(0);
@@ -172,7 +180,7 @@ static int CaptureAllMonitors(capture_state *Capture) {
     int AccessLost = 0;
 
     for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
-        int MonResult = CaptureMonitor(&Capture->Monitors[i], Capture->Device, 16);
+        int MonResult = CaptureMonitor(&Capture->Monitors[i], Capture->Device, 500);
         if(MonResult == 1) {
             Result = 1;
         }
@@ -183,20 +191,15 @@ static int CaptureAllMonitors(capture_state *Capture) {
 
     if(AccessLost) return(-1);
 
-    // Retry any monitors that timed out with a longer deadline.
-    // DXGI requires ReleaseFrame before AcquireNextFrame, so we can't
-    // hold the old frame while waiting, but we can give stragglers
-    // more time on a second pass.
-    if(Result) {
-        for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
-            monitor_duplication *Mon = &Capture->Monitors[i];
-            if(!Mon->HasFrame && Mon->IsValid) {
-                int MonResult = CaptureMonitor(Mon, Capture->Device, 100);
-                if(MonResult == -1) AccessLost = 1;
-            }
+    for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
+        monitor_duplication *Mon = &Capture->Monitors[i];
+        if(!Mon->HasFrame && Mon->IsValid) {
+            int MonResult = CaptureMonitor(Mon, Capture->Device, 500);
+            if(MonResult == -1) AccessLost = 1;
+            else if(MonResult == 1) Result = 1;
         }
-        if(AccessLost) return(-1);
     }
+    if(AccessLost) return(-1);
 
     return(Result);
 }
