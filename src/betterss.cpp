@@ -67,10 +67,13 @@ static void wcscpy_internal(wchar_t *Dest, size_t DestSize, const wchar_t *Src) 
 
 static void UpdateOverlayShader(betterss_state *State);
 static int RenderOverlay(betterss_state *State);
+static void RefreshOverlay(betterss_state *State);
+static void HideOverlay(betterss_state *State);
 static void RegisterCurrentHotkey(betterss_state *State);
 static void UpdateTrayTip(betterss_state *State);
 
 #define WM_TRAYICON (WM_USER + 1)
+#define WM_MODIFIERCHANGED (WM_USER + 2)
 #define IDM_QUIT 1001
 #define IDM_STARTUP 1002
 #define IDM_CHANGEHOTKEY 1003
@@ -146,8 +149,10 @@ static void SetStartupEnabled(int Enable) {
     HKEY Key;
     if(RegOpenKeyExW(HKEY_CURRENT_USER, StartupKeyPath, 0, KEY_WRITE, &Key) == ERROR_SUCCESS) {
         if(Enable) {
-            wchar_t ExePath[MAX_PATH];
-            GetModuleFileNameW(0, ExePath, MAX_PATH);
+            wchar_t ExePath[MAX_PATH + 2];
+            ExePath[0] = L'"';
+            GetModuleFileNameW(0, ExePath + 1, MAX_PATH);
+            wcscat_internal(ExePath, ArrayCount(ExePath), L"\"");
             RegSetValueExW(Key, L"BetterSS", 0, REG_SZ, (BYTE*)ExePath, (DWORD)(wcslen_internal(ExePath) + 1) * sizeof(wchar_t));
         }
         else {
@@ -170,19 +175,20 @@ static void GetHotkeyString(hotkey_binding *H, wchar_t *Buffer, int BufferLen) {
     if(KeyName[0]) wcscat_internal(Buffer, BufferLen, KeyName);
 }
 
-static int IsModifierVK(UINT VK) {
-    return(VK == VK_CONTROL || VK == VK_LCONTROL || VK == VK_RCONTROL ||
-           VK == VK_SHIFT || VK == VK_LSHIFT || VK == VK_RSHIFT ||
-           VK == VK_MENU || VK == VK_LMENU || VK == VK_RMENU ||
-           VK == VK_LWIN || VK == VK_RWIN);
+static UINT ModifierFromVK(UINT VK) {
+    if(VK == VK_SHIFT || VK == VK_LSHIFT || VK == VK_RSHIFT) return(MOD_SHIFT);
+    if(VK == VK_CONTROL || VK == VK_LCONTROL || VK == VK_RCONTROL) return(MOD_CONTROL);
+    if(VK == VK_MENU || VK == VK_LMENU || VK == VK_RMENU) return(MOD_ALT);
+    if(VK == VK_LWIN || VK == VK_RWIN) return(MOD_WIN);
+    return(0);
 }
 
 static UINT GetCurrentMods(void) {
     UINT Mods = 0;
-    if(GetKeyState(VK_CONTROL) & 0x8000) Mods |= MOD_CONTROL;
-    if(GetKeyState(VK_SHIFT) & 0x8000) Mods |= MOD_SHIFT;
-    if(GetKeyState(VK_MENU) & 0x8000) Mods |= MOD_ALT;
-    if((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) Mods |= MOD_WIN;
+    if((GetAsyncKeyState(VK_LCONTROL) | GetAsyncKeyState(VK_RCONTROL)) & 0x8000) Mods |= MOD_CONTROL;
+    if((GetAsyncKeyState(VK_LSHIFT) | GetAsyncKeyState(VK_RSHIFT)) & 0x8000) Mods |= MOD_SHIFT;
+    if((GetAsyncKeyState(VK_LMENU) | GetAsyncKeyState(VK_RMENU)) & 0x8000) Mods |= MOD_ALT;
+    if((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) Mods |= MOD_WIN;
     return Mods;
 }
 
@@ -197,14 +203,20 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int Code, WPARAM WParam, LPARAM LPa
     betterss_state *State = (betterss_state *)GetWindowLongPtrW(g_HookTargetWindow, GWLP_USERDATA);
     if(!State) return(CallNextHookEx(0, Code, WParam, LParam));
 
-    if(WParam != WM_KEYDOWN && WParam != WM_SYSKEYDOWN) {
+    KBDLLHOOKSTRUCT *Kbd = (KBDLLHOOKSTRUCT *)LParam;
+    UINT VK = Kbd->vkCode;
+    UINT Modifier = ModifierFromVK(VK);
+
+    if(Modifier) {
+        if(WParam == WM_KEYDOWN || WParam == WM_SYSKEYDOWN) State->LiveMods |= Modifier;
+        else if(WParam == WM_KEYUP || WParam == WM_SYSKEYUP) State->LiveMods &= ~Modifier;
+        if(State->IsCapturing) {
+            PostMessageW(State->Window, WM_MODIFIERCHANGED, 0, 0);
+        }
         return(CallNextHookEx(State->KeyboardHook, Code, WParam, LParam));
     }
 
-    KBDLLHOOKSTRUCT *Kbd = (KBDLLHOOKSTRUCT *)LParam;
-    UINT VK = Kbd->vkCode;
-
-    if(IsModifierVK(VK)) {
+    if(WParam != WM_KEYDOWN && WParam != WM_SYSKEYDOWN) {
         return(CallNextHookEx(State->KeyboardHook, Code, WParam, LParam));
     }
 
@@ -416,6 +428,129 @@ static void CloakWindow(HWND Window, BOOL Cloak) {
     DwmSetWindowAttribute(Window, DWMWA_CLOAK, &Cloak, sizeof(Cloak));
 }
 
+struct window_enum_context
+{
+    window_entry *Entries;
+    int Count;
+    int Capacity;
+    HWND OverlayWindow;
+    RECT VirtualScreen;
+};
+
+static RECT RectOffset(RECT R, int DX, int DY) {
+    R.left += DX; R.top += DY;
+    R.right += DX; R.bottom += DY;
+    return(R);
+}
+
+static BOOL CALLBACK CollectWindowEntries(HWND Hwnd, LPARAM LParam) {
+    window_enum_context *Ctx = (window_enum_context *)LParam;
+    if(Ctx->Count >= Ctx->Capacity) return(FALSE);
+    if(Hwnd == Ctx->OverlayWindow) return(TRUE);
+    if(!IsWindowVisible(Hwnd)) return(TRUE);
+
+    LONG_PTR ExStyle = GetWindowLongPtrW(Hwnd, GWL_EXSTYLE);
+    if(ExStyle & WS_EX_TOOLWINDOW) return(TRUE);
+
+    BOOL Cloaked = FALSE;
+    DwmGetWindowAttribute(Hwnd, DWMWA_CLOAKED, &Cloaked, sizeof(Cloaked));
+    if(Cloaked) return(TRUE);
+
+    RECT SnapBounds = {};
+    HRESULT hr = DwmGetWindowAttribute(Hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &SnapBounds, sizeof(SnapBounds));
+    if(FAILED(hr)) GetWindowRect(Hwnd, &SnapBounds);
+    if(SnapBounds.right <= SnapBounds.left || SnapBounds.bottom <= SnapBounds.top) return(TRUE);
+
+    if(GetWindowTextLengthW(Hwnd) == 0) {
+        if(!(ExStyle & WS_EX_APPWINDOW)) {
+            return(TRUE);
+        }
+    }
+
+    window_entry *Entry = &Ctx->Entries[Ctx->Count];
+    Entry->Hwnd = Hwnd;
+    Entry->SnapBounds = RectOffset(SnapBounds, -Ctx->VirtualScreen.left, -Ctx->VirtualScreen.top);
+    Ctx->Count++;
+    return(TRUE);
+}
+
+static window_entry *FindWindowEntryAtPoint(window_entry *Entries, int Count, int X, int Y) {
+    for(int i = 0; i < Count; i++) {
+        if(X >= Entries[i].SnapBounds.left && X < Entries[i].SnapBounds.right &&
+           Y >= Entries[i].SnapBounds.top && Y < Entries[i].SnapBounds.bottom) {
+            return(&Entries[i]);
+        }
+    }
+    return(0);
+}
+
+static void UpdateSnapEnabled(betterss_state *State) {
+    if(!State->SnapEnabled && (State->LiveMods & State->SnapHeldMods) == 0) {
+        State->SnapEnabled = 1;
+    }
+}
+
+static void UpdateSnapPreview(betterss_state *State, int MouseX, int MouseY) {
+    RECT Current = SelectionGetRect(State->Selection);
+    if(State->LiveMods & MOD_SHIFT) {
+        window_entry *Hit = State->LastSnapEntry;
+        if(!Hit || MouseX < Hit->SnapBounds.left || MouseX >= Hit->SnapBounds.right ||
+           MouseY < Hit->SnapBounds.top || MouseY >= Hit->SnapBounds.bottom) {
+            Hit = FindWindowEntryAtPoint(State->WindowEntries, State->WindowEntryCount, MouseX, MouseY);
+            State->LastSnapEntry = Hit;
+        }
+        if(Hit) {
+            RECT Target = Hit->SnapBounds;
+            if(Current.left != Target.left || Current.top != Target.top ||
+               Current.right != Target.right || Current.bottom != Target.bottom) {
+                SelectionSetRect(State->Selection, Target);
+                UpdateOverlayShader(State);
+                RefreshOverlay(State);
+            }
+            return;
+        }
+    }
+    else {
+        State->LastSnapEntry = 0;
+    }
+
+    if(Current.right > Current.left || Current.bottom > Current.top) {
+        SelectionSetRect(State->Selection, {});
+        UpdateOverlayShader(State);
+        RefreshOverlay(State);
+    }
+}
+
+static int PromptForSaveFile(HWND Window, wchar_t *File, DWORD FileCount) {
+    OPENFILENAMEW Ofn = {};
+    Ofn.lStructSize = sizeof(Ofn);
+    Ofn.hwndOwner = Window;
+    Ofn.lpstrFile = File;
+    Ofn.nMaxFile = FileCount;
+    Ofn.lpstrFilter = L"PNG Files\0*.png\0All Files\0*.*\0";
+    Ofn.nFilterIndex = 1;
+    Ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+    Ofn.lpstrDefExt = L"png";
+    return(GetSaveFileNameW(&Ofn));
+}
+
+static void FinaliseCapture(betterss_state *State, RECT Region, selection_state *Annotations) {
+    if(State->CaptureMode == 1) {
+        wchar_t File[MAX_PATH] = L"screenshot.png";
+        if(PromptForSaveFile(State->Window, File, ArrayCount(File))) {
+            output_pixels Pixels = AcquireSelectionPixels(State->Renderer, State->Capture, Region, Annotations);
+            WritePixelsToFile(Pixels, File);
+            ReleaseOutputPixels(&Pixels);
+        }
+    }
+    else {
+        output_pixels Pixels = AcquireSelectionPixels(State->Renderer, State->Capture, Region, Annotations);
+        WritePixelsToClipboard(Pixels);
+        ReleaseOutputPixels(&Pixels);
+    }
+    HideOverlay(State);
+}
+
 static void InitializeShaders(betterss_renderer *R) {
     R->Device->CreateVertexShader(
         BetterSSVSBytes, sizeof(BetterSSVSBytes), 0, &R->VertexShader);
@@ -461,7 +596,26 @@ static void ShowOverlay(betterss_state *State) {
     ArenaReset(&State->CaptureArena);
     SelectionReset(State->Selection);
     AnnotationInit(State->Selection, &State->CaptureArena);
-    
+
+    State->SnapEnabled = 0;
+    State->SnapHeldMods = GetCurrentMods();
+    State->LiveMods = State->SnapHeldMods;
+    State->LastSnapEntry = 0;
+    State->LastMouseX = 0;
+    State->LastMouseY = 0;
+    State->WindowEntries = (window_entry *)ArenaAlloc(&State->CaptureArena, MAX_WINDOW_ENTRIES * sizeof(window_entry));
+    State->WindowEntryCount = 0;
+    if(State->WindowEntries) {
+        window_enum_context Ctx = {};
+        Ctx.Entries = State->WindowEntries;
+        Ctx.Count = 0;
+        Ctx.Capacity = MAX_WINDOW_ENTRIES;
+        Ctx.OverlayWindow = State->Window;
+        Ctx.VirtualScreen = State->Capture->VirtualScreen;
+        EnumWindows(CollectWindowEntries, (LPARAM)&Ctx);
+        State->WindowEntryCount = Ctx.Count;
+    }
+
     UpdateOverlayShader(State);
     if(!RenderOverlay(State)) {
         return;
@@ -650,6 +804,16 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
             if(State->IsCapturing && !State->Selection->IsAnnotating && !State->Selection->IsCensoring) {
                 int X = (short)LOWORD(LParam);
                 int Y = (short)HIWORD(LParam);
+
+                UpdateSnapEnabled(State);
+                if(State->SnapEnabled && (State->LiveMods & MOD_SHIFT)) {
+                    window_entry *Entry = FindWindowEntryAtPoint(State->WindowEntries, State->WindowEntryCount, X, Y);
+                    if(Entry) {
+                        FinaliseCapture(State, Entry->SnapBounds, State->Selection);
+                        break;
+                    }
+                }
+
                 SelectionBegin(State->Selection, X, Y);
             }
         } break;
@@ -672,6 +836,14 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                     AnnotationUpdate(State->Selection, X, Y);
                     RefreshOverlay(State);
                 }
+                else {
+                    UpdateSnapEnabled(State);
+                    if(State->SnapEnabled) {
+                        State->LastMouseX = X;
+                        State->LastMouseY = Y;
+                        UpdateSnapPreview(State, X, Y);
+                    }
+                }
             }
         } break;
 
@@ -681,31 +853,11 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                 RECT SelectRect = SelectionGetRect(State->Selection);
                 if((SelectRect.right - SelectRect.left) > 1 && 
                    (SelectRect.bottom - SelectRect.top) > 1) {
-                    if(State->CaptureMode == 1) { // Save file
-                        OPENFILENAMEW Ofn = {};
-                        wchar_t File[MAX_PATH] = L"screenshot.png";
-                        
-                        Ofn.lStructSize = sizeof(Ofn);
-                        Ofn.hwndOwner = Window;
-                        Ofn.lpstrFile = File;
-                        Ofn.nMaxFile = ArrayCount(File);
-                        Ofn.lpstrFilter = L"PNG Files\0*.png\0All Files\0*.*\0";
-                        Ofn.nFilterIndex = 1;
-                        Ofn.lpstrFileTitle = 0;
-                        Ofn.nMaxFileTitle = 0;
-                        Ofn.lpstrInitialDir = 0;
-                        Ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
-                        Ofn.lpstrDefExt = L"png";
-                        
-                        if(GetSaveFileNameW(&Ofn)) {
-                            SaveSelectionToFile(State->Renderer, State->Capture, SelectRect, File, State->Selection);
-                        }
-                    }
-                    else {
-                        CopySelectionToClipboard(State->Renderer, State->Capture, SelectRect, State->Selection);
-                    }
+                    FinaliseCapture(State, SelectRect, State->Selection);
                 }
-                HideOverlay(State);
+                else {
+                    HideOverlay(State);
+                }
             }
         } break;
 
@@ -766,6 +918,16 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                     AnnotationUndo(State->Selection);
                     RefreshOverlay(State);
                 }
+            }
+        } break;
+
+        case WM_MODIFIERCHANGED: {
+            if(!State->IsCapturing) break;
+            if(State->Selection->IsDragging || State->Selection->IsAnnotating || State->Selection->IsCensoring) break;
+
+            UpdateSnapEnabled(State);
+            if(State->SnapEnabled) {
+                UpdateSnapPreview(State, State->LastMouseX, State->LastMouseY);
             }
         } break;
 

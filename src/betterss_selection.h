@@ -51,6 +51,7 @@ static void SelectionBegin(selection_state *Selection, int X, int Y);
 static void SelectionUpdate(selection_state *Selection, int X, int Y);
 static void SelectionEnd(selection_state *Selection);
 static RECT SelectionGetRect(selection_state *Selection);
+static void SelectionSetRect(selection_state *Selection, RECT R);
 
 static void AnnotationInit(selection_state *Selection, memory_arena *Arena);
 static void AnnotationBegin(selection_state *Selection, memory_arena *Arena, int X, int Y);

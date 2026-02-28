@@ -43,6 +43,15 @@ static RECT SelectionGetRect(selection_state *Selection) {
     return(Result);
 }
 
+
+static void SelectionSetRect(selection_state *Selection, RECT R) {
+    Selection->StartX = R.left;
+    Selection->StartY = R.top;
+    Selection->CurrentX = R.right;
+    Selection->CurrentY = R.bottom;
+    Selection->IsDragging = 0;
+}
+
 static void AnnotationInit(selection_state *Selection, memory_arena *Arena) {
     Selection->Annotations = (annotation_entry *)ArenaAlloc(Arena, 
         MAX_ANNOTATIONS * sizeof(annotation_entry));

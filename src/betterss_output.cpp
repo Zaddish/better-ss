@@ -39,32 +39,8 @@ static ID3D11Texture2D *GetCachedTexture(betterss_renderer *R, betterss_renderer
     return Cache->Texture;
 }
 
-static int FindMonitorForRect(capture_state *C, RECT Selection, monitor_duplication **OutMon) {
-    int CenterX = (Selection.left + Selection.right) / 2;
-    int CenterY = (Selection.top + Selection.bottom) / 2;
-
-    CenterX += C->VirtualScreen.left;
-    CenterY += C->VirtualScreen.top;
-
-    for(uint32_t i = 0; i < C->MonitorCount; i++) {
-        monitor_duplication *Mon = &C->Monitors[i];
-        if(Mon->HasFrame && Mon->Texture) {
-            if(CenterX >= Mon->Bounds.left && CenterX < Mon->Bounds.right &&
-               CenterY >= Mon->Bounds.top && CenterY < Mon->Bounds.bottom) {
-                *OutMon = Mon;
-                return(1);
-            }
-        }
-    }
-
-    for(uint32_t i = 0; i < C->MonitorCount; i++) {
-        if(C->Monitors[i].HasFrame && C->Monitors[i].Texture) {
-            *OutMon = &C->Monitors[i];
-            return(1);
-        }
-    }
-
-    return(0);
+static int RectsOverlap(RECT A, RECT B) {
+    return(A.left < B.right && A.right > B.left && A.top < B.bottom && A.bottom > B.top);
 }
 
 static int CopyPixelsToClipboard(void *Pixels, uint32_t Width, uint32_t Height, uint32_t Pitch) {
@@ -143,6 +119,8 @@ static int CopyPixelsToClipboard(void *Pixels, uint32_t Width, uint32_t Height, 
 
 static int SavePixelsToFile(void *Pixels, uint32_t Width, uint32_t Height, uint32_t Pitch, const wchar_t *Filename) {
     int Result = 0;
+    uint32_t RowBytes = 0;
+    uint32_t BufferBytes = 0;
 
     IWICImagingFactory *Factory = 0;
     IWICStream *Stream = 0;
@@ -183,7 +161,9 @@ static int SavePixelsToFile(void *Pixels, uint32_t Width, uint32_t Height, uint3
         if(FAILED(hr)) goto done;
     }
 
-    hr = FrameEncoder->WritePixels(Height, Pitch, Height * Pitch, (uint8_t *)Pixels);
+    RowBytes = Width * 4;
+    BufferBytes = (Height > 0) ? ((Height - 1) * Pitch + RowBytes) : 0;
+    hr = FrameEncoder->WritePixels(Height, Pitch, BufferBytes, (uint8_t *)Pixels);
     if(SUCCEEDED(hr)) hr = FrameEncoder->Commit();
     if(SUCCEEDED(hr)) hr = Encoder->Commit();
     if(SUCCEEDED(hr)) Result = 1;
@@ -196,59 +176,79 @@ done:
     return(Result);
 }
 
-struct resolved_pixels {
-    void *Data;
-    uint32_t Width;
-    uint32_t Height;
-    uint32_t Pitch;
-    ID3D11Texture2D *Staging;
-    betterss_renderer *Renderer;
-};
-
-static resolved_pixels ResolveSelectionPixels(betterss_renderer *R, capture_state *C, RECT Selection, selection_state *S) {
-    resolved_pixels Result = {};
+static output_pixels AcquireSelectionPixels(betterss_renderer *R, capture_state *C, RECT Selection, selection_state *S) {
+    output_pixels Result = {};
     if(!R || !R->Device || !R->Context || !C) return(Result);
-
-    monitor_duplication *Mon = 0;
-    if(!FindMonitorForRect(C, Selection, &Mon)) return(Result);
 
     int SelWidth = Selection.right - Selection.left;
     int SelHeight = Selection.bottom - Selection.top;
     if(SelWidth <= 0 || SelHeight <= 0) return(Result);
 
-    int VirtLeft = Selection.left + C->VirtualScreen.left;
-    int VirtTop = Selection.top + C->VirtualScreen.top;
-    int LocalLeft = VirtLeft - Mon->Bounds.left;
-    int LocalTop = VirtTop - Mon->Bounds.top;
+    RECT SelScreen;
+    SelScreen.left = Selection.left + C->VirtualScreen.left;
+    SelScreen.top = Selection.top + C->VirtualScreen.top;
+    SelScreen.right = Selection.right + C->VirtualScreen.left;
+    SelScreen.bottom = Selection.bottom + C->VirtualScreen.top;
 
-    int MonWidth = Mon->Bounds.right - Mon->Bounds.left;
-    int MonHeight = Mon->Bounds.bottom - Mon->Bounds.top;
+    ID3D11Texture2D *RenderTexture = GetCachedTexture(R, &R->CachedRender, (uint32_t)SelWidth, (uint32_t)SelHeight,
+        D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0);
+    if(!RenderTexture || !R->CachedRender.RTV) return(Result);
 
-    if(LocalLeft < 0) { SelWidth += LocalLeft; LocalLeft = 0; }
-    if(LocalTop < 0) { SelHeight += LocalTop; LocalTop = 0; }
-    if(LocalLeft + SelWidth > MonWidth) SelWidth = MonWidth - LocalLeft;
-    if(LocalTop + SelHeight > MonHeight) SelHeight = MonHeight - LocalTop;
-    if(SelWidth <= 0 || SelHeight <= 0) return(Result);
+    R->Context->OMSetRenderTargets(1, &R->CachedRender.RTV, 0);
+    float ClearColor[4] = {};
+    R->Context->ClearRenderTargetView(R->CachedRender.RTV, ClearColor);
 
-    D3D11_BOX SrcBox = {};
-    SrcBox.left = (UINT)LocalLeft;
-    SrcBox.top = (UINT)LocalTop;
-    SrcBox.front = 0;
-    SrcBox.right = (UINT)(LocalLeft + SelWidth);
-    SrcBox.bottom = (UINT)(LocalTop + SelHeight);
-    SrcBox.back = 1;
+    // render each overlapping monitor through the shader so rotation is handled correctly
+    // viewport covers the full monitor region in render target space; pixels outside the
+    // render target are clipped by D3D11
+    R->Context->VSSetShader(R->VertexShader, 0, 0);
+    R->Context->PSSetShader(R->OverlayShader, 0, 0);
+    R->Context->PSSetConstantBuffers(0, 1, &R->ConstantBuffer);
+    R->Context->PSSetSamplers(0, 1, &R->Sampler);
+
+    int CopiedAny = 0;
+    for(uint32_t i = 0; i < C->MonitorCount; i++) {
+        monitor_duplication *Mon = &C->Monitors[i];
+        if(!Mon->HasFrame || !Mon->Texture || !Mon->SRV) continue;
+        if(!RectsOverlap(SelScreen, Mon->Bounds)) continue;
+
+        int MonW = Mon->Bounds.right - Mon->Bounds.left;
+        int MonH = Mon->Bounds.bottom - Mon->Bounds.top;
+
+        D3D11_VIEWPORT MonViewport = {};
+        MonViewport.TopLeftX = (float)(Mon->Bounds.left - SelScreen.left);
+        MonViewport.TopLeftY = (float)(Mon->Bounds.top - SelScreen.top);
+        MonViewport.Width = (float)MonW;
+        MonViewport.Height = (float)MonH;
+        MonViewport.MaxDepth = 1.0f;
+        R->Context->RSSetViewports(1, &MonViewport);
+
+        overlay_const_buffer Constants = {};
+        Constants.DimFactor = 1.0f;
+        Constants.TexelSize[0] = 1.0f / (float)MonW;
+        Constants.TexelSize[1] = 1.0f / (float)MonH;
+        Constants.Rotation = (float)Mon->Rotation;
+
+        D3D11_MAPPED_SUBRESOURCE Mapped;
+        if(SUCCEEDED(R->Context->Map(R->ConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &Mapped))) {
+            memcpy(Mapped.pData, &Constants, sizeof(Constants));
+            R->Context->Unmap(R->ConstantBuffer, 0);
+        }
+
+        R->Context->PSSetShaderResources(0, 1, &Mon->SRV);
+        R->Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        R->Context->Draw(3, 0);
+        CopiedAny = 1;
+    }
+
+    if(!CopiedAny) {
+        ID3D11RenderTargetView *NullRTV = 0;
+        R->Context->OMSetRenderTargets(1, &NullRTV, 0);
+        return(Result);
+    }
 
     int HasAnnotations = S && S->AnnotationCount > 0;
-
     if(HasAnnotations) {
-        ID3D11Texture2D *RenderTexture = GetCachedTexture(R, &R->CachedRender, (uint32_t)SelWidth, (uint32_t)SelHeight,
-            D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0);
-        if(!RenderTexture || !R->CachedRender.RTV) return(Result);
-
-        R->Context->CopySubresourceRegion(RenderTexture, 0, 0, 0, 0, Mon->Texture, 0, &SrcBox);
-
-        R->Context->OMSetRenderTargets(1, &R->CachedRender.RTV, 0);
-
         D3D11_VIEWPORT Viewport = {};
         Viewport.Width = (float)SelWidth;
         Viewport.Height = (float)SelHeight;
@@ -256,22 +256,20 @@ static resolved_pixels ResolveSelectionPixels(betterss_renderer *R, capture_stat
         R->Context->RSSetViewports(1, &Viewport);
 
         RenderAnnotations(R, S, -Selection.left, -Selection.top, SelWidth, SelHeight);
-
-        ID3D11RenderTargetView *NullRTV = 0;
-        R->Context->OMSetRenderTargets(1, &NullRTV, 0);
-
-        SrcBox.left = 0;
-        SrcBox.top = 0;
-        SrcBox.right = (UINT)SelWidth;
-        SrcBox.bottom = (UINT)SelHeight;
     }
+
+    ID3D11RenderTargetView *NullRTV = 0;
+    R->Context->OMSetRenderTargets(1, &NullRTV, 0);
 
     ID3D11Texture2D *Staging = GetCachedTexture(R, &R->CachedStaging, (uint32_t)SelWidth, (uint32_t)SelHeight,
         D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ);
     if(!Staging) return(Result);
 
-    ID3D11Texture2D *CopySrc = HasAnnotations ? R->CachedRender.Texture : Mon->Texture;
-    R->Context->CopySubresourceRegion(Staging, 0, 0, 0, 0, CopySrc, 0, &SrcBox);
+    D3D11_BOX FullBox = {};
+    FullBox.right = (UINT)SelWidth;
+    FullBox.bottom = (UINT)SelHeight;
+    FullBox.back = 1;
+    R->Context->CopySubresourceRegion(Staging, 0, 0, 0, 0, RenderTexture, 0, &FullBox);
 
     D3D11_MAPPED_SUBRESOURCE Mapped;
     if(SUCCEEDED(R->Context->Map(Staging, 0, D3D11_MAP_READ, 0, &Mapped))) {
@@ -279,6 +277,7 @@ static resolved_pixels ResolveSelectionPixels(betterss_renderer *R, capture_stat
         Result.Width = (uint32_t)SelWidth;
         Result.Height = (uint32_t)SelHeight;
         Result.Pitch = Mapped.RowPitch;
+        Result.SourceKind = OutputPixelsSource_D3DStaging;
         Result.Staging = Staging;
         Result.Renderer = R;
     }
@@ -286,29 +285,19 @@ static resolved_pixels ResolveSelectionPixels(betterss_renderer *R, capture_stat
     return(Result);
 }
 
-static void ReleaseResolvedPixels(resolved_pixels *P) {
-    if(P->Data) {
+static void ReleaseOutputPixels(output_pixels *P) {
+    if(P->SourceKind == OutputPixelsSource_D3DStaging && P->Data) {
         P->Renderer->Context->Unmap(P->Staging, 0);
-        P->Data = 0;
     }
+    *P = {};
 }
 
-static int CopySelectionToClipboard(betterss_renderer *R, capture_state *C, RECT Selection, selection_state *S) {
-    resolved_pixels Pixels = ResolveSelectionPixels(R, C, Selection, S);
-    int Result = 0;
-    if(Pixels.Data) {
-        Result = CopyPixelsToClipboard(Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch);
-    }
-    ReleaseResolvedPixels(&Pixels);
-    return(Result);
+static int WritePixelsToClipboard(output_pixels Pixels) {
+    if(!Pixels.Data) return(0);
+    return(CopyPixelsToClipboard(Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch));
 }
 
-static int SaveSelectionToFile(betterss_renderer *R, capture_state *C, RECT Selection, const wchar_t *Filename, selection_state *S) {
-    resolved_pixels Pixels = ResolveSelectionPixels(R, C, Selection, S);
-    int Result = 0;
-    if(Pixels.Data) {
-        Result = SavePixelsToFile(Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch, Filename);
-    }
-    ReleaseResolvedPixels(&Pixels);
-    return(Result);
+static int WritePixelsToFile(output_pixels Pixels, const wchar_t *Filename) {
+    if(!Pixels.Data) return(0);
+    return(SavePixelsToFile(Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch, Filename));
 }

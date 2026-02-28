@@ -18,6 +18,15 @@ struct betterss_renderer;
 struct capture_state;
 struct selection_state;
 
+// will expand if shit gets cooked with this
+#define MAX_WINDOW_ENTRIES 512
+
+struct window_entry
+{
+    HWND Hwnd;
+    RECT SnapBounds;
+};
+
 struct memory_arena
 {
     uint8_t *Memory;
@@ -63,4 +72,13 @@ struct betterss_state
     int IsCapturingHotkey;
     int ConfiguringSaveHotkey; // 0 = standard capture hotkey, 1 = save file hotkey
     int CaptureMode; // 0 = clipboard, 1 = save file
+
+    window_entry *WindowEntries;
+    int WindowEntryCount;
+    window_entry *LastSnapEntry;
+    int LastMouseX;
+    int LastMouseY;
+    int SnapEnabled;
+    UINT SnapHeldMods;
+    UINT LiveMods;
 };
