@@ -409,7 +409,7 @@ static HWND CreateOverlayWindow(betterss_state *State, HINSTANCE Instance, WNDPR
     int Width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     int Height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 
-    DWORD ExStyle = WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
+    DWORD ExStyle = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP;
     DWORD Style = WS_POPUP;
 
     HWND Window = CreateWindowExW(ExStyle, WindowClass.lpszClassName, L"BetterSS",
