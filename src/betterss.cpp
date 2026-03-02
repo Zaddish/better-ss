@@ -23,9 +23,6 @@
 
 static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, RECT MonitorBounds, 
     int VirtScreenLeft, int VirtScreenTop, DXGI_MODE_ROTATION Rotation, float DimFactor);
-static void ComposeMonitorsToRT(betterss_renderer *R, capture_state *C,
-                                int OriginX, int OriginY,
-                                RECT SelectRect, float DimFactor);
 
 #include "betterss_d3d11.cpp"
 #include "betterss_capture.cpp"

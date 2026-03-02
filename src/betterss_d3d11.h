@@ -77,3 +77,9 @@ static void RendererResize(betterss_renderer *Renderer, uint32_t Width, uint32_t
 static int RendererPresent(betterss_renderer *Renderer);
 static void RenderAnnotations(betterss_renderer *R, selection_state *Selection,
                                int OffsetX, int OffsetY, int TargetWidth, int TargetHeight);
+static ID3D11Texture2D *GetCachedTexture(betterss_renderer *R, betterss_renderer::cached_texture *Cache,
+                                          uint32_t Width, uint32_t Height,
+                                          D3D11_USAGE Usage, UINT BindFlags, UINT CPUAccess);
+static void ComposeMonitorsToRT(betterss_renderer *R, capture_state *C,
+                                int OriginX, int OriginY,
+                                RECT SelectRect, float DimFactor);
