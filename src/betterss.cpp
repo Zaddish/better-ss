@@ -155,7 +155,7 @@ static void SetStartupEnabled(int Enable) {
         if(Enable) {
             wchar_t ExePath[MAX_PATH + 2];
             ExePath[0] = L'"';
-            GetModuleFileNameW(0, ExePath + 1, MAX_PATH);
+            GetModuleFileNameW(0, ExePath + 1, ArrayCount(ExePath) - 1);
             wcscat_internal(ExePath, ArrayCount(ExePath), L"\"");
             RegSetValueExW(Key, L"BetterSS", 0, REG_SZ, (BYTE*)ExePath, (DWORD)(wcslen_internal(ExePath) + 1) * sizeof(wchar_t));
         }
