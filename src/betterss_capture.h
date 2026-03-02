@@ -13,18 +13,17 @@ struct monitor_duplication
     int HasFrame;
 };
 
+#define MAX_MONITORS 8
+
 struct capture_state
 {
     ID3D11Device *Device;
-    monitor_duplication *Monitors;
+    monitor_duplication Monitors[MAX_MONITORS];
     uint32_t MonitorCount;
-    uint32_t MonitorCapacity;
     RECT VirtualScreen;
-    int IsInitialized;
 };
 
 static int CaptureIsValid(capture_state *Capture);
-static void InitializeCaptureState(capture_state *Capture);
 static int RefreshCaptureState(capture_state *Capture, ID3D11Device *Device);
 static void ReleaseDuplications(capture_state *Capture);
 static void ReleaseCaptureState(capture_state *Capture);

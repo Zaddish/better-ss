@@ -5,44 +5,6 @@
 #include <objbase.h>
 #include <tmmintrin.h>
 
-static ID3D11Texture2D *GetCachedTexture(betterss_renderer *R, betterss_renderer::cached_texture *Cache,
-                                          uint32_t Width, uint32_t Height,
-                                          D3D11_USAGE Usage, UINT BindFlags, UINT CPUAccess) {
-    if(Cache->Texture && Cache->Width >= Width && Cache->Height >= Height) {
-        return Cache->Texture;
-    }
-
-    if(Cache->RTV) { Cache->RTV->Release(); Cache->RTV = 0; }
-    if(Cache->Texture) { Cache->Texture->Release(); Cache->Texture = 0; }
-
-    D3D11_TEXTURE2D_DESC Desc = {};
-    Desc.Width = Width;
-    Desc.Height = Height;
-    Desc.MipLevels = 1;
-    Desc.ArraySize = 1;
-    Desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    Desc.SampleDesc.Count = 1;
-    Desc.Usage = Usage;
-    Desc.BindFlags = BindFlags;
-    Desc.CPUAccessFlags = CPUAccess;
-
-    R->Device->CreateTexture2D(&Desc, 0, &Cache->Texture);
-
-    if(Cache->Texture) {
-        if(BindFlags & D3D11_BIND_RENDER_TARGET) {
-            R->Device->CreateRenderTargetView(Cache->Texture, 0, &Cache->RTV);
-        }
-        Cache->Width = Width;
-        Cache->Height = Height;
-    }
-
-    return Cache->Texture;
-}
-
-static int RectsOverlap(RECT A, RECT B) {
-    return(A.left < B.right && A.right > B.left && A.top < B.bottom && A.bottom > B.top);
-}
-
 static int CopyPixelsToClipboard(void *Pixels, uint32_t Width, uint32_t Height, uint32_t Pitch) {
     uint32_t RowSize = ((Width * 3 + 3) / 4) * 4;
     uint32_t DataSize = RowSize * Height;
@@ -123,20 +85,18 @@ static int CopyPixelsToClipboard(void *Pixels, uint32_t Width, uint32_t Height, 
     return(0);
 }
 
-static int SavePixelsToFile(void *Pixels, uint32_t Width, uint32_t Height, uint32_t Pitch, const wchar_t *Filename) {
+static int SavePixelsToFile(IWICImagingFactory *Factory, void *Pixels, uint32_t Width, uint32_t Height, uint32_t Pitch, const wchar_t *Filename) {
+    if(!Factory) return(0);
+
     int Result = 0;
     uint32_t RowBytes = 0;
     uint32_t BufferBytes = 0;
 
-    IWICImagingFactory *Factory = 0;
     IWICStream *Stream = 0;
     IWICBitmapEncoder *Encoder = 0;
     IWICBitmapFrameEncode *FrameEncoder = 0;
 
-    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, 0, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&Factory));
-    if(FAILED(hr)) goto done;
-
-    hr = Factory->CreateStream(&Stream);
+    HRESULT hr = Factory->CreateStream(&Stream);
     if(FAILED(hr)) goto done;
 
     hr = Stream->InitializeFromFilename(Filename, GENERIC_WRITE);
@@ -178,7 +138,6 @@ done:
     if(FrameEncoder) FrameEncoder->Release();
     if(Encoder) Encoder->Release();
     if(Stream) Stream->Release();
-    if(Factory) Factory->Release();
     return(Result);
 }
 
@@ -204,54 +163,8 @@ static output_pixels AcquireSelectionPixels(betterss_renderer *R, capture_state 
     float ClearColor[4] = {};
     R->Context->ClearRenderTargetView(R->CachedRender.RTV, ClearColor);
 
-    // render each overlapping monitor through the shader so rotation is handled correctly
-    // viewport covers the full monitor region in render target space; pixels outside the
-    // render target are clipped by D3D11
-    R->Context->VSSetShader(R->VertexShader, 0, 0);
-    R->Context->PSSetShader(R->OverlayShader, 0, 0);
-    R->Context->PSSetConstantBuffers(0, 1, &R->ConstantBuffer);
-    R->Context->PSSetSamplers(0, 1, &R->Sampler);
-
-    int CopiedAny = 0;
-    for(uint32_t i = 0; i < C->MonitorCount; i++) {
-        monitor_duplication *Mon = &C->Monitors[i];
-        if(!Mon->HasFrame || !Mon->Texture || !Mon->SRV) continue;
-        if(!RectsOverlap(SelScreen, Mon->Bounds)) continue;
-
-        int MonW = Mon->Bounds.right - Mon->Bounds.left;
-        int MonH = Mon->Bounds.bottom - Mon->Bounds.top;
-
-        D3D11_VIEWPORT MonViewport = {};
-        MonViewport.TopLeftX = (float)(Mon->Bounds.left - SelScreen.left);
-        MonViewport.TopLeftY = (float)(Mon->Bounds.top - SelScreen.top);
-        MonViewport.Width = (float)MonW;
-        MonViewport.Height = (float)MonH;
-        MonViewport.MaxDepth = 1.0f;
-        R->Context->RSSetViewports(1, &MonViewport);
-
-        overlay_const_buffer Constants = {};
-        Constants.DimFactor = 1.0f;
-        Constants.TexelSize[0] = 1.0f / (float)MonW;
-        Constants.TexelSize[1] = 1.0f / (float)MonH;
-        Constants.Rotation = (float)Mon->Rotation;
-
-        D3D11_MAPPED_SUBRESOURCE Mapped;
-        if(SUCCEEDED(R->Context->Map(R->ConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &Mapped))) {
-            memcpy(Mapped.pData, &Constants, sizeof(Constants));
-            R->Context->Unmap(R->ConstantBuffer, 0);
-        }
-
-        R->Context->PSSetShaderResources(0, 1, &Mon->SRV);
-        R->Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        R->Context->Draw(3, 0);
-        CopiedAny = 1;
-    }
-
-    if(!CopiedAny) {
-        ID3D11RenderTargetView *NullRTV = 0;
-        R->Context->OMSetRenderTargets(1, &NullRTV, 0);
-        return(Result);
-    }
+    RECT NoSelection = {};
+    ComposeMonitorsToRT(R, C, SelScreen.left, SelScreen.top, NoSelection, 1.0f);
 
     int HasAnnotations = S && S->AnnotationCount > 0;
     if(HasAnnotations) {
@@ -303,7 +216,7 @@ static int WritePixelsToClipboard(output_pixels Pixels) {
     return(CopyPixelsToClipboard(Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch));
 }
 
-static int WritePixelsToFile(output_pixels Pixels, const wchar_t *Filename) {
-    if(!Pixels.Data) return(0);
-    return(SavePixelsToFile(Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch, Filename));
+static int WritePixelsToFile(void *WICFactory, output_pixels Pixels, const wchar_t *Filename) {
+    if(!Pixels.Data || !WICFactory) return(0);
+    return(SavePixelsToFile((IWICImagingFactory *)WICFactory, Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch, Filename));
 }

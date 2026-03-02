@@ -17,6 +17,8 @@ Right click drag will draw freehand red lines and Shift + right click drag will 
 
 Default hotkeys are Ctrl+Shift+S to capture to your clipboard and Ctrl+Shift+Alt+S to capture to a file.  Both are configurable from the tray icon.
 
+You can hold alt and right click to draw a highlight on the screen before capturing, similar to annotations.
+
 Escape cancels the capture.  
 
 ## Building

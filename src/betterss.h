@@ -73,6 +73,12 @@ struct betterss_state
     int ConfiguringSaveHotkey; // 0 = standard capture hotkey, 1 = save file hotkey
     int CaptureMode; // 0 = clipboard, 1 = save file
 
+    HCURSOR CursorArrow;
+    HCURSOR CursorCross;
+    HCURSOR CursorSizeAll;
+
+    void *WICFactory;
+
     window_entry *WindowEntries;
     int WindowEntryCount;
     window_entry *LastSnapEntry;

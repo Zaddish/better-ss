@@ -47,6 +47,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
+fxc /nologo /T ps_5_0 /E PSMain /O3 /WX /Fh betterss_composite_ps.h /Vn BetterSSCompositePSBytes betterss_composite.hlsl
+if errorlevel 1 (
+    echo ERROR: Composite pixel shader compilation failed
+    popd
+    exit /b 1
+)
+
 popd
 
 :: Compiler flags

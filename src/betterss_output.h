@@ -25,6 +25,6 @@ static output_pixels AcquireSelectionPixels(betterss_renderer *R, capture_state 
 static void ReleaseOutputPixels(output_pixels *P);
 
 static int WritePixelsToClipboard(output_pixels Pixels);
-static int WritePixelsToFile(output_pixels Pixels, const wchar_t *Filename);
+static int WritePixelsToFile(void *WICFactory, output_pixels Pixels, const wchar_t *Filename);
 
 

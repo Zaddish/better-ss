@@ -1,5 +1,5 @@
 static int CaptureIsValid(capture_state *Capture) {
-    return(Capture->IsInitialized && Capture->Monitors && Capture->MonitorCount > 0);
+    return(Capture->MonitorCount > 0);
 }
 
 static void ReleaseMonitorDuplication(monitor_duplication *Mon) {
@@ -19,19 +19,6 @@ static void ReleaseMonitorDuplication(monitor_duplication *Mon) {
     Mon->HasFrame = 0;
 }
 
-static void InitializeCaptureState(capture_state *Capture) {
-    if(Capture->IsInitialized) return;
-    
-    Capture->MonitorCapacity = 8;
-    Capture->Monitors = (monitor_duplication *)VirtualAlloc(0, 
-        Capture->MonitorCapacity * sizeof(monitor_duplication), 
-        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    
-    if(Capture->Monitors) {
-        Capture->IsInitialized = 1;
-    }
-}
-
 static void ReleaseDuplications(capture_state *Capture) {
     for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
         ReleaseMonitorDuplication(&Capture->Monitors[i]);
@@ -42,17 +29,9 @@ static void ReleaseDuplications(capture_state *Capture) {
 
 static void ReleaseCaptureState(capture_state *Capture) {
     ReleaseDuplications(Capture);
-    if(Capture->Monitors) {
-        VirtualFree(Capture->Monitors, 0, MEM_RELEASE);
-        Capture->Monitors = 0;
-    }
-    Capture->IsInitialized = 0;
-    Capture->MonitorCapacity = 0;
 }
 
 static int RefreshCaptureState(capture_state *Capture, ID3D11Device *Device) {
-    if(!Capture->IsInitialized || !Capture->Monitors) return 0;
-    
     ReleaseDuplications(Capture);
     
     Capture->Device = Device;
@@ -75,7 +54,7 @@ static int RefreshCaptureState(capture_state *Capture, ID3D11Device *Device) {
 
     IDXGIOutput *Output = 0;
     for(UINT OutputIdx = 0; SUCCEEDED(Adapter->EnumOutputs(OutputIdx, &Output)); OutputIdx++) {
-        if(Capture->MonitorCount >= Capture->MonitorCapacity) {
+        if(Capture->MonitorCount >= MAX_MONITORS) {
             Output->Release();
             break;
         }

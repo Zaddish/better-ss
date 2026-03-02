@@ -13,7 +13,8 @@ struct line_point
 enum annotation_type 
 { 
     ANNOTATION_LINE = 0,
-    ANNOTATION_RECT = 1 
+    ANNOTATION_RECT = 1,
+    ANNOTATION_HIGHLIGHT = 2
 };
 
 struct annotation_entry
@@ -34,8 +35,8 @@ struct selection_state
     int IsSelecting;
     int IsDragging;
     
-    // Annotations
     annotation_entry *Annotations;
+    line_point *PointStorage;
     int AnnotationCount;
     int MaxAnnotations;
     int IsAnnotating;
@@ -54,7 +55,7 @@ static RECT SelectionGetRect(selection_state *Selection);
 static void SelectionSetRect(selection_state *Selection, RECT R);
 
 static void AnnotationInit(selection_state *Selection, memory_arena *Arena);
-static void AnnotationBegin(selection_state *Selection, memory_arena *Arena, int X, int Y);
+static void AnnotationBegin(selection_state *Selection, int X, int Y, annotation_type Type);
 static void AnnotationUpdate(selection_state *Selection, int X, int Y);
 static void AnnotationEnd(selection_state *Selection);
 static void AnnotationUndo(selection_state *Selection);

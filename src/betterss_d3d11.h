@@ -18,6 +18,12 @@ struct line_const_buffer
     float LineColor[4];
 };
 
+struct composite_const_buffer
+{
+    float UVScale[2];
+    float Padding[2];
+};
+
 struct line_vertex
 {
     float Position[2];
@@ -47,12 +53,21 @@ struct betterss_renderer
     struct cached_texture {
         ID3D11Texture2D *Texture;
         ID3D11RenderTargetView *RTV;
+        ID3D11ShaderResourceView *SRV;
         uint32_t Width;
         uint32_t Height;
     };
 
     cached_texture CachedStaging;
     cached_texture CachedRender;
+
+    ID3D11RasterizerState *NoCullState;
+
+    // highlight composite
+    ID3D11PixelShader *CompositeShader;
+    ID3D11Buffer *CompositeConstantBuffer;
+    cached_texture HighlightTexture;
+    cached_texture SceneCopy;
 };
 
 static int RendererIsValid(betterss_renderer *Renderer);

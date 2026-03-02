@@ -21,6 +21,12 @@
 #include "betterss_selection.h"
 #include "betterss_output.h"
 
+static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, RECT MonitorBounds, 
+    int VirtScreenLeft, int VirtScreenTop, DXGI_MODE_ROTATION Rotation, float DimFactor);
+static void ComposeMonitorsToRT(betterss_renderer *R, capture_state *C,
+                                int OriginX, int OriginY,
+                                RECT SelectRect, float DimFactor);
+
 #include "betterss_d3d11.cpp"
 #include "betterss_capture.cpp"
 #include "betterss_selection.cpp"
@@ -30,6 +36,7 @@
 #include "betterss_ps.h"
 #include "betterss_line_vs.h"
 #include "betterss_line_ps.h"
+#include "betterss_composite_ps.h"
 
 extern "C" int _fltused = 0x9875;
 
@@ -321,7 +328,7 @@ static void ShowTrayMenu(betterss_state *State) {
     POINT Pt;
     GetCursorPos(&Pt);
     SetForegroundWindow(State->Window);
-    SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32512)));
+    SetCursor(State->CursorArrow);
     TrackPopupMenu(Menu, TPM_RIGHTBUTTON, Pt.x, Pt.y, 0, State->Window, 0);
     PostMessageW(State->Window, WM_NULL, 0, 0);
     DestroyMenu(Menu);
@@ -369,7 +376,7 @@ static void ShowHotkeyDialog(betterss_state *State, HINSTANCE Instance, int Conf
     Wc.cbSize = sizeof(Wc);
     Wc.lpfnWndProc = HotkeyDialogProc;
     Wc.hInstance = Instance;
-    Wc.hCursor = LoadCursorW(0, MAKEINTRESOURCEW(32512));
+    Wc.hCursor = State->CursorArrow;
     Wc.lpszClassName = L"BetterSSHotkeyDialog";
     RegisterClassExW(&Wc);
     
@@ -400,7 +407,7 @@ static HWND CreateOverlayWindow(betterss_state *State, HINSTANCE Instance, WNDPR
     WindowClass.style = CS_HREDRAW | CS_VREDRAW;
     WindowClass.lpfnWndProc = WndProc;
     WindowClass.hInstance = Instance;
-    WindowClass.hCursor = LoadCursorW(0, MAKEINTRESOURCEW(32512));
+    WindowClass.hCursor = State->CursorArrow;
     WindowClass.lpszClassName = L"BetterSSOverlay";
     RegisterClassExW(&WindowClass);
 
@@ -539,7 +546,7 @@ static void FinaliseCapture(betterss_state *State, RECT Region, selection_state 
         wchar_t File[MAX_PATH] = L"screenshot.png";
         if(PromptForSaveFile(State->Window, File, ArrayCount(File))) {
             output_pixels Pixels = AcquireSelectionPixels(State->Renderer, State->Capture, Region, Annotations);
-            WritePixelsToFile(Pixels, File);
+            WritePixelsToFile(State->WICFactory, Pixels, File);
             ReleaseOutputPixels(&Pixels);
         }
     }
@@ -558,7 +565,8 @@ static void InitializeShaders(betterss_renderer *R) {
         BetterSSPSBytes, sizeof(BetterSSPSBytes), 0, &R->OverlayShader);
     InitializeLineRenderer(R, 
         BetterSSLineVSBytes, sizeof(BetterSSLineVSBytes),
-        BetterSSLinePSBytes, sizeof(BetterSSLinePSBytes));
+        BetterSSLinePSBytes, sizeof(BetterSSLinePSBytes),
+        BetterSSCompositePSBytes, sizeof(BetterSSCompositePSBytes));
 }
 
 static void ShowOverlay(betterss_state *State) {
@@ -627,7 +635,7 @@ static void ShowOverlay(betterss_state *State) {
     BringWindowToTop(State->Window);
     SetCapture(State->Window);
 
-    SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32515)));
+    SetCursor(State->CursorCross);
 
     State->IsCapturing = 1;
     State->Selection->IsSelecting = 1;
@@ -641,13 +649,13 @@ static void HideOverlay(betterss_state *State) {
     ReleaseAllFrames(State->Capture);
     SelectionReset(State->Selection);
 
-    SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32512)));
+    SetCursor(State->CursorArrow);
 
     State->IsCapturing = 0;
 }
 
 static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, RECT MonitorBounds, 
-    int VirtScreenLeft, int VirtScreenTop, DXGI_MODE_ROTATION Rotation) {
+    int VirtScreenLeft, int VirtScreenTop, DXGI_MODE_ROTATION Rotation, float DimFactor) {
     int MonW = MonitorBounds.right - MonitorBounds.left;
     int MonH = MonitorBounds.bottom - MonitorBounds.top;
     int MonOffsetX = MonitorBounds.left - VirtScreenLeft;
@@ -663,7 +671,7 @@ static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, RECT
     Constants.SelectionRect[1] = SelTop;
     Constants.SelectionRect[2] = SelWidth;
     Constants.SelectionRect[3] = SelHeight;
-    Constants.DimFactor = 0.4f;
+    Constants.DimFactor = DimFactor;
     Constants.TexelSize[0] = 1.0f / (float)MonW;
     Constants.TexelSize[1] = 1.0f / (float)MonH;
     Constants.Rotation = (float)Rotation;
@@ -680,7 +688,38 @@ static void UpdateOverlayShader(betterss_state *State) {
     RECT DefaultBounds = {0, 0, (LONG)State->Renderer->Width, (LONG)State->Renderer->Height};
     UpdateOverlayConstBuffer(State->Renderer, SelectRect, DefaultBounds, 
         State->Capture->VirtualScreen.left, State->Capture->VirtualScreen.top, 
-        DXGI_MODE_ROTATION_IDENTITY);
+        DXGI_MODE_ROTATION_IDENTITY, 0.4f);
+}
+
+static void ComposeMonitorsToRT(betterss_renderer *R, capture_state *C,
+                                int OriginX, int OriginY,
+                                RECT SelectRect, float DimFactor) {
+    R->Context->VSSetShader(R->VertexShader, 0, 0);
+    R->Context->PSSetShader(R->OverlayShader, 0, 0);
+    R->Context->PSSetConstantBuffers(0, 1, &R->ConstantBuffer);
+    R->Context->PSSetSamplers(0, 1, &R->Sampler);
+
+    for(uint32_t i = 0; i < C->MonitorCount; i++) {
+        monitor_duplication *Mon = &C->Monitors[i];
+        if(!Mon->HasFrame || !Mon->Texture || !Mon->SRV) continue;
+
+        int MonW = Mon->Bounds.right - Mon->Bounds.left;
+        int MonH = Mon->Bounds.bottom - Mon->Bounds.top;
+
+        D3D11_VIEWPORT MonViewport = {};
+        MonViewport.TopLeftX = (float)(Mon->Bounds.left - OriginX);
+        MonViewport.TopLeftY = (float)(Mon->Bounds.top - OriginY);
+        MonViewport.Width = (float)MonW;
+        MonViewport.Height = (float)MonH;
+        MonViewport.MaxDepth = 1.0f;
+        R->Context->RSSetViewports(1, &MonViewport);
+
+        UpdateOverlayConstBuffer(R, SelectRect, Mon->Bounds, OriginX, OriginY, Mon->Rotation, DimFactor);
+
+        R->Context->PSSetShaderResources(0, 1, &Mon->SRV);
+        R->Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        R->Context->Draw(3, 0);
+    }
 }
 
 static int RenderOverlay(betterss_state *State) {
@@ -702,39 +741,10 @@ static int RenderOverlay(betterss_state *State) {
         return RendererPresent(R);
     }
 
-    R->Context->VSSetShader(R->VertexShader, 0, 0);
-    R->Context->PSSetShader(R->OverlayShader, 0, 0);
-    R->Context->PSSetConstantBuffers(0, 1, &R->ConstantBuffer);
-    R->Context->PSSetSamplers(0, 1, &R->Sampler);
-
     RECT SelectRect = SelectionGetRect(State->Selection);
-
-    int VirtLeft = State->Capture->VirtualScreen.left;
-    int VirtTop = State->Capture->VirtualScreen.top;
-
-    for(uint32_t i = 0; i < State->Capture->MonitorCount; i++) {
-        monitor_duplication *Mon = &State->Capture->Monitors[i];
-        if(!Mon->HasFrame || !Mon->Texture || !Mon->SRV) continue;
-
-        int MonW = Mon->Bounds.right - Mon->Bounds.left;
-        int MonH = Mon->Bounds.bottom - Mon->Bounds.top;
-        int OffsetX = Mon->Bounds.left - VirtLeft;
-        int OffsetY = Mon->Bounds.top - VirtTop;
-
-        D3D11_VIEWPORT MonViewport = {};
-        MonViewport.TopLeftX = (float)OffsetX;
-        MonViewport.TopLeftY = (float)OffsetY;
-        MonViewport.Width = (float)MonW;
-        MonViewport.Height = (float)MonH;
-        MonViewport.MaxDepth = 1.0f;
-        R->Context->RSSetViewports(1, &MonViewport);
-
-        UpdateOverlayConstBuffer(R, SelectRect, Mon->Bounds, VirtLeft, VirtTop, Mon->Rotation);
-        
-        R->Context->PSSetShaderResources(0, 1, &Mon->SRV);
-        R->Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        R->Context->Draw(3, 0);
-    }
+    ComposeMonitorsToRT(R, State->Capture, 
+        State->Capture->VirtualScreen.left, State->Capture->VirtualScreen.top,
+        SelectRect, 0.4f);
 
     Viewport.Width = (float)R->Width;
     Viewport.Height = (float)R->Height;
@@ -868,10 +878,13 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                 if(GetKeyState(VK_SHIFT) & 0x8000) {
                     CensorBegin(State->Selection, X, Y);
                 }
-                else {
-                    AnnotationBegin(State->Selection, &State->CaptureArena, X, Y);
+                else if(GetKeyState(VK_MENU) & 0x8000) {
+                    AnnotationBegin(State->Selection, X, Y, ANNOTATION_HIGHLIGHT);
                 }
-                SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32516)));
+                else {
+                    AnnotationBegin(State->Selection, X, Y, ANNOTATION_LINE);
+                }
+                SetCursor(State->CursorSizeAll);
             }
         } break;
 
@@ -880,11 +893,11 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                 if(State->Selection->IsCensoring) {
                     CensorEnd(State->Selection);
                     RefreshOverlay(State);
-                    SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32515)));
+                    SetCursor(State->CursorCross);
                 }
                 else if(State->Selection->IsAnnotating) {
                     AnnotationEnd(State->Selection);
-                    SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32515)));
+                    SetCursor(State->CursorCross);
                 }
             }
         } break;
@@ -899,10 +912,10 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
         case WM_SETCURSOR: {
             if(State->IsCapturing) {
                 if(State->Selection->IsAnnotating || State->Selection->IsCensoring) {
-                    SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32516)));
+                    SetCursor(State->CursorSizeAll);
                 }
                 else {
-                    SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32515)));
+                    SetCursor(State->CursorCross);
                 }
                 return(TRUE);
             }
@@ -963,6 +976,14 @@ void WinMainCRTStartup(void) {
     State->CaptureArena.Size = ArenaSize;
     if(!State->CaptureArena.Memory) ExitProcess(1);
     
+    State->CursorArrow = LoadCursorW(0, MAKEINTRESOURCEW(32512));
+    State->CursorCross = LoadCursorW(0, MAKEINTRESOURCEW(32515));
+    State->CursorSizeAll = LoadCursorW(0, MAKEINTRESOURCEW(32516));
+
+    IWICImagingFactory *WICFactory = 0;
+    CoCreateInstance(CLSID_WICImagingFactory, 0, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&WICFactory));
+    State->WICFactory = WICFactory;
+
     LoadSettings(State);
 
     HINSTANCE Instance = GetModuleHandleW(0);
@@ -976,7 +997,6 @@ void WinMainCRTStartup(void) {
     if(!RendererIsValid(State->Renderer)) ExitProcess(2);
     InitializeShaders(State->Renderer);
 
-    InitializeCaptureState(State->Capture);
     if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) ExitProcess(3);
 
     CloakWindow(Window, TRUE);
@@ -999,6 +1019,10 @@ void WinMainCRTStartup(void) {
     RemoveTrayIcon(State);
     ReleaseCaptureState(State->Capture);
     ReleaseRenderer(State->Renderer);
+    
+    if(State->WICFactory) {
+        ((IWICImagingFactory *)State->WICFactory)->Release();
+    }
     
     if(State->CaptureArena.Memory) {
         VirtualFree(State->CaptureArena.Memory, 0, MEM_RELEASE);

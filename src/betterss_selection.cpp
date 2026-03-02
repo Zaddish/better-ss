@@ -55,31 +55,26 @@ static void SelectionSetRect(selection_state *Selection, RECT R) {
 static void AnnotationInit(selection_state *Selection, memory_arena *Arena) {
     Selection->Annotations = (annotation_entry *)ArenaAlloc(Arena, 
         MAX_ANNOTATIONS * sizeof(annotation_entry));
-    Selection->MaxAnnotations = Selection->Annotations ? MAX_ANNOTATIONS : 0;
+    Selection->PointStorage = (line_point *)ArenaAlloc(Arena,
+        MAX_ANNOTATIONS * MAX_POINTS_PER_LINE * sizeof(line_point));
+    Selection->MaxAnnotations = (Selection->Annotations && Selection->PointStorage) ? MAX_ANNOTATIONS : 0;
 }
 
-// 0 is valid (first annotation)
-// invalid state is determined by bounds checking
-static void AnnotationBegin(selection_state *Selection, memory_arena *Arena, int X, int Y) {
-    if(!Selection->Annotations) return;
+static void AnnotationBegin(selection_state *Selection, int X, int Y, annotation_type Type) {
+    if(!Selection->Annotations || !Selection->PointStorage) return;
     if(Selection->AnnotationCount >= Selection->MaxAnnotations) return;
     
     annotation_entry *Entry = &Selection->Annotations[Selection->AnnotationCount];
+    Entry->Points = Selection->PointStorage + Selection->AnnotationCount * MAX_POINTS_PER_LINE;
+    Entry->Type = Type;
+    Entry->PointCapacity = MAX_POINTS_PER_LINE;
+    Entry->PointCount = 1;
+    Entry->Points[0].X = X;
+    Entry->Points[0].Y = Y;
     
-    Entry->Points = (line_point *)ArenaAlloc(Arena, 
-        MAX_POINTS_PER_LINE * sizeof(line_point));
-    
-    if(Entry->Points) {
-        Entry->Type = ANNOTATION_LINE;
-        Entry->PointCapacity = MAX_POINTS_PER_LINE;
-        Entry->PointCount = 1;
-        Entry->Points[0].X = X;
-        Entry->Points[0].Y = Y;
-        
-        Selection->CurrentAnnotationIndex = Selection->AnnotationCount;
-        Selection->AnnotationCount++;
-        Selection->IsAnnotating = 1;
-    }
+    Selection->CurrentAnnotationIndex = Selection->AnnotationCount;
+    Selection->AnnotationCount++;
+    Selection->IsAnnotating = 1;
 }
 
 static void AnnotationUpdate(selection_state *Selection, int X, int Y) {
@@ -93,9 +88,7 @@ static void AnnotationUpdate(selection_state *Selection, int X, int Y) {
         line_point *LastPoint = &Entry->Points[Entry->PointCount - 1];
         int DX = X - LastPoint->X;
         int DY = Y - LastPoint->Y;
-        int DistSq = DX * DX + DY * DY;
-        
-        if(DistSq < 4) return;
+        if(DX * DX + DY * DY < 4) return;
     }
     
     //TODO(zaddish): let the user know we hit capacity, or remove the LRU line
