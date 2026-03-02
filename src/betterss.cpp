@@ -479,7 +479,7 @@ static BOOL CALLBACK CollectWindowEntries(HWND Hwnd, LPARAM LParam) {
 }
 
 static window_entry *FindWindowEntryAtPoint(window_entry *Entries, int Count, int X, int Y) {
-    for(int i = 0; i < Count; i++) {
+    for EachCount(i, Count) {
         if(X >= Entries[i].SnapBounds.left && X < Entries[i].SnapBounds.right &&
            Y >= Entries[i].SnapBounds.top && Y < Entries[i].SnapBounds.bottom) {
             return(&Entries[i]);
@@ -608,7 +608,7 @@ static void ShowOverlay(betterss_state *State) {
     State->LastSnapEntry = 0;
     State->LastMouseX = 0;
     State->LastMouseY = 0;
-    State->WindowEntries = (window_entry *)ArenaAlloc(&State->CaptureArena, MAX_WINDOW_ENTRIES * sizeof(window_entry));
+    State->WindowEntries = PushArray(&State->CaptureArena, window_entry, MAX_WINDOW_ENTRIES);
     State->WindowEntryCount = 0;
     if(State->WindowEntries) {
         window_enum_context Ctx = {};
@@ -673,11 +673,7 @@ static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, RECT
     Constants.TexelSize[1] = 1.0f / (float)MonH;
     Constants.Rotation = (float)Rotation;
 
-    D3D11_MAPPED_SUBRESOURCE Mapped;
-    if(SUCCEEDED(R->Context->Map(R->ConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &Mapped))) {
-        memcpy(Mapped.pData, &Constants, sizeof(Constants));
-        R->Context->Unmap(R->ConstantBuffer, 0);
-    }
+    UpdateConstantBuffer(R->Context, R->ConstantBuffer, &Constants, sizeof(Constants));
 }
 
 static void UpdateOverlayShader(betterss_state *State) {
@@ -696,7 +692,7 @@ static void ComposeMonitorsToRT(betterss_renderer *R, capture_state *C,
     R->Context->PSSetConstantBuffers(0, 1, &R->ConstantBuffer);
     R->Context->PSSetSamplers(0, 1, &R->Sampler);
 
-    for(uint32_t i = 0; i < C->MonitorCount; i++) {
+    for EachIndex(i, C->MonitorCount) {
         monitor_duplication *Mon = &C->Monitors[i];
         if(!Mon->HasFrame || !Mon->Texture || !Mon->SRV) continue;
 
@@ -967,11 +963,7 @@ void WinMainCRTStartup(void) {
     State->Capture = (capture_state *)(StateBlock + sizeof(betterss_state) + sizeof(betterss_renderer));
     State->Selection = (selection_state *)(StateBlock + sizeof(betterss_state) + sizeof(betterss_renderer) + sizeof(capture_state));
 
-    size_t ArenaSize = 16 * 1024 * 1024;
-    State->CaptureArena.Memory = (uint8_t *)VirtualAlloc(0, ArenaSize,
-        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    State->CaptureArena.Size = ArenaSize;
-    if(!State->CaptureArena.Memory) ExitProcess(1);
+    if(!ArenaInit(&State->CaptureArena, 64 * 1024 * 1024)) ExitProcess(1);
     
     State->CursorArrow = LoadCursorW(0, MAKEINTRESOURCEW(32512));
     State->CursorCross = LoadCursorW(0, MAKEINTRESOURCEW(32515));
@@ -1021,9 +1013,7 @@ void WinMainCRTStartup(void) {
         ((IWICImagingFactory *)State->WICFactory)->Release();
     }
     
-    if(State->CaptureArena.Memory) {
-        VirtualFree(State->CaptureArena.Memory, 0, MEM_RELEASE);
-    }
+    ArenaRelease(&State->CaptureArena);
 
     ExitProcess(0);
 }

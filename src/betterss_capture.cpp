@@ -20,7 +20,7 @@ static void ReleaseMonitorDuplication(monitor_duplication *Mon) {
 }
 
 static void ReleaseDuplications(capture_state *Capture) {
-    for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
+    for EachIndex(i, Capture->MonitorCount) {
         ReleaseMonitorDuplication(&Capture->Monitors[i]);
     }
     Capture->MonitorCount = 0;
@@ -101,7 +101,7 @@ static void ReleaseFrame(monitor_duplication *Mon) {
 }
 
 static void ReleaseAllFrames(capture_state *Capture) {
-    for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
+    for EachIndex(i, Capture->MonitorCount) {
         ReleaseFrame(&Capture->Monitors[i]);
     }
 }
@@ -158,7 +158,7 @@ static int CaptureAllMonitors(capture_state *Capture) {
     int Result = 0;
     int AccessLost = 0;
 
-    for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
+    for EachIndex(i, Capture->MonitorCount) {
         int MonResult = CaptureMonitor(&Capture->Monitors[i], Capture->Device, 500);
         if(MonResult == 1) {
             Result = 1;
@@ -170,7 +170,7 @@ static int CaptureAllMonitors(capture_state *Capture) {
 
     if(AccessLost) return(-1);
 
-    for(uint32_t i = 0; i < Capture->MonitorCount; i++) {
+    for EachIndex(i, Capture->MonitorCount) {
         monitor_duplication *Mon = &Capture->Monitors[i];
         if(!Mon->HasFrame && Mon->IsValid) {
             int MonResult = CaptureMonitor(Mon, Capture->Device, 500);

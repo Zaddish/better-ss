@@ -19,6 +19,14 @@ static void CreateDynamicBuffer(ID3D11Device *Device, ID3D11Buffer **Out, UINT B
     Device->CreateBuffer(&Desc, 0, Out);
 }
 
+static void UpdateConstantBuffer(ID3D11DeviceContext *Ctx, ID3D11Buffer *Buffer, void *Data, size_t Size) {
+    D3D11_MAPPED_SUBRESOURCE Mapped;
+    if(SUCCEEDED(Ctx->Map(Buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &Mapped))) {
+        memcpy(Mapped.pData, Data, Size);
+        Ctx->Unmap(Buffer, 0);
+    }
+}
+
 static int RendererIsValid(betterss_renderer *Renderer) {
     int Result = (Renderer->Device &&
                   Renderer->SwapChain &&
@@ -378,11 +386,7 @@ static void UpdateLineConstants(betterss_renderer *R, int TargetWidth, int Targe
     Constants.LineColor[2] = ColorB;
     Constants.LineColor[3] = ColorA;
 
-    D3D11_MAPPED_SUBRESOURCE Mapped;
-    if(SUCCEEDED(R->Context->Map(R->LineConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &Mapped))) {
-        memcpy(Mapped.pData, &Constants, sizeof(Constants));
-        R->Context->Unmap(R->LineConstantBuffer, 0);
-    }
+    UpdateConstantBuffer(R->Context, R->LineConstantBuffer, &Constants, sizeof(Constants));
 }
 
 static void RenderAnnotations(betterss_renderer *R, selection_state *Selection, 
@@ -395,7 +399,7 @@ static void RenderAnnotations(betterss_renderer *R, selection_state *Selection,
     float HighlightHalfH = 20.0f;
 
     int MaxVertices = 0;
-    for(int i = 0; i < Selection->AnnotationCount; i++) {
+    for EachCount(i, Selection->AnnotationCount) {
         annotation_entry *Entry = &Selection->Annotations[i];
         if((Entry->Type == ANNOTATION_LINE || Entry->Type == ANNOTATION_HIGHLIGHT) && Entry->Points && Entry->PointCount > 1)
             MaxVertices += (Entry->PointCount - 1) * 6;
@@ -421,7 +425,7 @@ static void RenderAnnotations(betterss_renderer *R, selection_state *Selection,
     line_vertex *Vertices = (line_vertex *)Mapped.pData;
     int VertexIndex = 0;
 
-    for(int i = 0; i < Selection->AnnotationCount; i++) {
+    for EachCount(i, Selection->AnnotationCount) {
         annotation_entry *Entry = &Selection->Annotations[i];
         if(Entry->Type == ANNOTATION_LINE) {
             if(!Entry->Points || Entry->PointCount <= 1) continue;
@@ -439,7 +443,7 @@ static void RenderAnnotations(betterss_renderer *R, selection_state *Selection,
     }
     int OpaqueCount = VertexIndex;
 
-    for(int i = 0; i < Selection->AnnotationCount; i++) {
+    for EachCount(i, Selection->AnnotationCount) {
         annotation_entry *Entry = &Selection->Annotations[i];
         if(Entry->Type == ANNOTATION_HIGHLIGHT) {
             if(!Entry->Points || Entry->PointCount <= 1) continue;
@@ -503,11 +507,7 @@ static void RenderAnnotations(betterss_renderer *R, selection_state *Selection,
                 composite_const_buffer CompConstants = {};
                 CompConstants.UVScale[0] = (float)TargetWidth / (float)R->HighlightTexture.Width;
                 CompConstants.UVScale[1] = (float)TargetHeight / (float)R->HighlightTexture.Height;
-                D3D11_MAPPED_SUBRESOURCE CBMap;
-                if(SUCCEEDED(R->Context->Map(R->CompositeConstantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &CBMap))) {
-                    memcpy(CBMap.pData, &CompConstants, sizeof(CompConstants));
-                    R->Context->Unmap(R->CompositeConstantBuffer, 0);
-                }
+                UpdateConstantBuffer(R->Context, R->CompositeConstantBuffer, &CompConstants, sizeof(CompConstants));
 
                 R->Context->IASetInputLayout(0);
                 R->Context->VSSetShader(R->VertexShader, 0, 0);

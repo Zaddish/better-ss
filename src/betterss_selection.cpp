@@ -53,10 +53,8 @@ static void SelectionSetRect(selection_state *Selection, RECT R) {
 }
 
 static void AnnotationInit(selection_state *Selection, memory_arena *Arena) {
-    Selection->Annotations = (annotation_entry *)ArenaAlloc(Arena, 
-        MAX_ANNOTATIONS * sizeof(annotation_entry));
-    Selection->PointStorage = (line_point *)ArenaAlloc(Arena,
-        MAX_ANNOTATIONS * MAX_POINTS_PER_LINE * sizeof(line_point));
+    Selection->Annotations = PushArray(Arena, annotation_entry, MAX_ANNOTATIONS);
+    Selection->PointStorage = PushArray(Arena, line_point, MAX_ANNOTATIONS * MAX_POINTS_PER_LINE);
     Selection->MaxAnnotations = (Selection->Annotations && Selection->PointStorage) ? MAX_ANNOTATIONS : 0;
 }
 
