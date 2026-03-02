@@ -51,16 +51,12 @@ static int CopyPixelsToClipboard(void *Pixels, uint32_t Width, uint32_t Height, 
             _mm_storeu_si128((__m128i *)(DstRow + x * 3 + 32), _mm_or_si128(_mm_srli_si128(s2, 8), _mm_slli_si128(s3, 4)));
         }
 
-        if(x < Width) {
-            x = Width - 16;
-            __m128i s0 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i *)(SrcRow + x * 4 +  0)), ShufMask);
-            __m128i s1 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i *)(SrcRow + x * 4 + 16)), ShufMask);
-            __m128i s2 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i *)(SrcRow + x * 4 + 32)), ShufMask);
-            __m128i s3 = _mm_shuffle_epi8(_mm_loadu_si128((__m128i *)(SrcRow + x * 4 + 48)), ShufMask);
-
-            _mm_storeu_si128((__m128i *)(DstRow + x * 3 +  0), _mm_or_si128(s0, _mm_slli_si128(s1, 12)));
-            _mm_storeu_si128((__m128i *)(DstRow + x * 3 + 16), _mm_or_si128(_mm_srli_si128(s1, 4), _mm_slli_si128(s2, 8)));
-            _mm_storeu_si128((__m128i *)(DstRow + x * 3 + 32), _mm_or_si128(_mm_srli_si128(s2, 8), _mm_slli_si128(s3, 4)));
+        for(; x < Width; x++) {
+            uint8_t *SrcPx = SrcRow + x * 4;
+            uint8_t *DstPx = DstRow + x * 3;
+            DstPx[0] = SrcPx[0];
+            DstPx[1] = SrcPx[1];
+            DstPx[2] = SrcPx[2];
         }
     }
 
