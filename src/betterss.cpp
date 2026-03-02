@@ -368,15 +368,7 @@ static LRESULT CALLBACK HotkeyDialogProc(HWND Window, UINT Message, WPARAM WPara
 
 static void ShowHotkeyDialog(betterss_state *State, HINSTANCE Instance, int ConfiguringSave) {
     if(State->HotkeyDialog) return;
-    
-    WNDCLASSEXW Wc = {};
-    Wc.cbSize = sizeof(Wc);
-    Wc.lpfnWndProc = HotkeyDialogProc;
-    Wc.hInstance = Instance;
-    Wc.hCursor = State->CursorArrow;
-    Wc.lpszClassName = L"BetterSSHotkeyDialog";
-    RegisterClassExW(&Wc);
-    
+
     int Width = 350;
     int Height = 120;
     int X = (GetSystemMetrics(SM_CXSCREEN) - Width) / 2;
@@ -969,15 +961,21 @@ void WinMainCRTStartup(void) {
     State->CursorCross = LoadCursorW(0, MAKEINTRESOURCEW(32515));
     State->CursorSizeAll = LoadCursorW(0, MAKEINTRESOURCEW(32516));
 
-    IWICImagingFactory *WICFactory = 0;
-    CoCreateInstance(CLSID_WICImagingFactory, 0, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&WICFactory));
-    State->WICFactory = WICFactory;
+    CoCreateInstance(CLSID_WICImagingFactory, 0, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&State->WICFactory));
 
     LoadSettings(State);
 
     HINSTANCE Instance = GetModuleHandleW(0);
     HWND Window = CreateOverlayWindow(State, Instance, WindowProc);
     if(!Window) ExitProcess(1);
+
+    WNDCLASSEXW HotkeyDialogWc = {};
+    HotkeyDialogWc.cbSize = sizeof(HotkeyDialogWc);
+    HotkeyDialogWc.lpfnWndProc = HotkeyDialogProc;
+    HotkeyDialogWc.hInstance = Instance;
+    HotkeyDialogWc.hCursor = State->CursorArrow;
+    HotkeyDialogWc.lpszClassName = L"BetterSSHotkeyDialog";
+    RegisterClassExW(&HotkeyDialogWc);
 
     State->Window = Window;
     g_HookTargetWindow = Window;
@@ -1010,7 +1008,7 @@ void WinMainCRTStartup(void) {
     ReleaseRenderer(State->Renderer);
     
     if(State->WICFactory) {
-        ((IWICImagingFactory *)State->WICFactory)->Release();
+        State->WICFactory->Release();
     }
     
     ArenaRelease(&State->CaptureArena);

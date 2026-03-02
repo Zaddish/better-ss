@@ -212,7 +212,7 @@ static int WritePixelsToClipboard(output_pixels Pixels) {
     return(CopyPixelsToClipboard(Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch));
 }
 
-static int WritePixelsToFile(void *WICFactory, output_pixels Pixels, const wchar_t *Filename) {
+static int WritePixelsToFile(IWICImagingFactory *WICFactory, output_pixels Pixels, const wchar_t *Filename) {
     if(!Pixels.Data || !WICFactory) return(0);
-    return(SavePixelsToFile((IWICImagingFactory *)WICFactory, Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch, Filename));
+    return(SavePixelsToFile(WICFactory, Pixels.Data, Pixels.Width, Pixels.Height, Pixels.Pitch, Filename));
 }

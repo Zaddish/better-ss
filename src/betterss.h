@@ -4,6 +4,8 @@
 #include <windef.h>
 #include <shellapi.h>
 
+struct IWICImagingFactory;
+
 #define ArrayCount(a) (sizeof(a) / sizeof((a)[0]))
 #define DeferLoop(begin, end) for(int _i_ = ((begin), 0); !_i_; _i_ += 1, (end))
 #define EachIndex(it, count)  (uint32_t it = 0; it < (count); it += 1)
@@ -104,7 +106,7 @@ struct betterss_state
     HCURSOR CursorCross;
     HCURSOR CursorSizeAll;
 
-    void *WICFactory;
+    IWICImagingFactory *WICFactory;
 
     window_entry *WindowEntries;
     int WindowEntryCount;
