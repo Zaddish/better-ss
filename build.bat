@@ -1,7 +1,14 @@
 @echo off
 setlocal enabledelayedexpansion
+cd /D "%~dp0"
 
 :: BetterSS Build Script
+
+:: arguments
+for %%a in (%*) do set "%%~a=1"
+if not "%release%"=="1" set debug=1
+if "%debug%"=="1"   set release=0
+if "%release%"=="1" set debug=0
 
 where /q cl || (
     echo ERROR: cl not found - run from Visual Studio Developer Command Prompt
@@ -15,6 +22,7 @@ where /q fxc || (
 
 if not exist build mkdir build
 
+:: compile shaders
 pushd src
 
 call :compile_shader vs_5_0 VSMain betterss_vs.h BetterSSVSBytes betterss_overlay.hlsl "Overlay VS" || (popd & exit /b 1)
@@ -25,10 +33,12 @@ call :compile_shader ps_5_0 PSMain betterss_composite_ps.h BetterSSCompositePSBy
 
 popd
 
+:: compile / LLD
 set CFLAGS=/nologo /W3 /WX /GS- /Gs999999 /Gm- /GR- /EHsc /Oi
 set LDFLAGS=/incremental:no /opt:icf /opt:ref /subsystem:windows /entry:WinMainCRTStartup /nodefaultlib kernel32.lib user32.lib gdi32.lib dwmapi.lib d3d11.lib dxgi.lib dxguid.lib ole32.lib shell32.lib advapi32.lib comdlg32.lib windowscodecs.lib
 
-if "%1"=="debug" (
+set auto_compile_flags=
+if "%debug%"=="1" (
     echo Building DEBUG...
     set CFLAGS=%CFLAGS% /Od /Z7 /D_DEBUG
     set LDFLAGS=%LDFLAGS% /debug
@@ -39,11 +49,16 @@ if "%1"=="debug" (
     set OUT=build\betterss.exe
 )
 
-cl %CFLAGS% /Fe%OUT% src\betterss.cpp /link %LDFLAGS%
-if errorlevel 1 (
-    echo ERROR: Compilation failed
-    exit /b 1
-)
+:: get git commit id
+for /f %%i in ('git describe --always --dirty 2^>nul')   do set auto_compile_flags=!auto_compile_flags! /DBUILD_GIT_HASH=\"%%i\"
+for /f %%i in ('git rev-parse HEAD 2^>nul')              do set auto_compile_flags=!auto_compile_flags! /DBUILD_GIT_HASH_FULL=\"%%i\"
+
+
+
+:: BUILD
+cl %CFLAGS% %auto_compile_flags% /Fe%OUT% src\betterss.cpp /link %LDFLAGS% || exit /b 1
+
+
 
 del /q *.obj 2>nul
 
