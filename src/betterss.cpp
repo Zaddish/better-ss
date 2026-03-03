@@ -836,7 +836,8 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                     RefreshOverlay(State);
                 }
                 else if(State->Selection->IsAnnotating) {
-                    AnnotationUpdate(State->Selection, X, Y);
+                    int DrawY = State->Selection->StraightHighlightY ? State->Selection->StraightHighlightY : Y;
+                    AnnotationUpdate(State->Selection, X, DrawY);
                     RefreshOverlay(State);
                 }
                 else {
@@ -868,7 +869,11 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
             if(State->IsCapturing) {
                 int X = (short)LOWORD(LParam);
                 int Y = (short)HIWORD(LParam);
-                if(GetKeyState(VK_SHIFT) & 0x8000) {
+                if((GetKeyState(VK_SHIFT) & 0x8000) && (GetKeyState(VK_MENU) & 0x8000)) {
+                    AnnotationBegin(State->Selection, X, Y, ANNOTATION_HIGHLIGHT);
+                    State->Selection->StraightHighlightY = Y;
+                }
+                else if(GetKeyState(VK_SHIFT) & 0x8000) {
                     CensorBegin(State->Selection, X, Y);
                 }
                 else if(GetKeyState(VK_MENU) & 0x8000) {

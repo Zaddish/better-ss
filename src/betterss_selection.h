@@ -45,6 +45,8 @@ struct selection_state
     int IsCensoring;
     int CensorStartX;
     int CensorStartY;
+
+    int StraightHighlightY;
 };
 
 static void SelectionReset(selection_state *Selection);
