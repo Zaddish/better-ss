@@ -24,7 +24,6 @@ struct annotation_entry
     int PointCount;
     int PointCapacity;
     int X0, Y0, X1, Y1;
-    int Vertical;
 };
 
 struct selection_state

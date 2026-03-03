@@ -334,7 +334,6 @@ static void EmitLineSegments(line_vertex *Vertices, int *VertexIndex,
 
 static void EmitHighlightSegments(line_vertex *Vertices, int *VertexIndex,
                                    annotation_entry *Entry, int OffsetX, int OffsetY, float HalfHeight) {
-    float Tilt = HalfHeight * 0.15f;
     float Smooth = 0.3f;
 
     for(int j = 0; j < Entry->PointCount - 1; j++) {
@@ -363,26 +362,21 @@ static void EmitHighlightSegments(line_vertex *Vertices, int *VertexIndex,
             Y1 = RawY1;
         }
 
-        float TopL_X, TopL_Y, TopR_X, TopR_Y, BotL_X, BotL_Y, BotR_X, BotR_Y;
-        if(Entry->Vertical) {
-            TopL_X = X0 - HalfHeight; TopL_Y = Y0 + Tilt;
-            TopR_X = X1 - HalfHeight; TopR_Y = Y1 + Tilt;
-            BotL_X = X0 + HalfHeight; BotL_Y = Y0;
-            BotR_X = X1 + HalfHeight; BotR_Y = Y1;
-        } else {
-            TopL_X = X0 + Tilt;  TopL_Y = Y0 - HalfHeight;
-            TopR_X = X1 + Tilt;  TopR_Y = Y1 - HalfHeight;
-            BotL_X = X0;         BotL_Y = Y0 + HalfHeight;
-            BotR_X = X1;         BotR_Y = Y1 + HalfHeight;
-        }
+        float DX = X1 - X0;
+        float DY = Y1 - Y0;
+        float Len = FastSqrt(DX * DX + DY * DY);
+        if(Len < 0.001f) continue;
+
+        float PerpX = -DY / Len * HalfHeight;
+        float PerpY =  DX / Len * HalfHeight;
 
         int VI = *VertexIndex;
-        Vertices[VI].Position[0] = TopL_X; Vertices[VI].Position[1] = TopL_Y; VI++;
-        Vertices[VI].Position[0] = TopR_X; Vertices[VI].Position[1] = TopR_Y; VI++;
-        Vertices[VI].Position[0] = BotL_X; Vertices[VI].Position[1] = BotL_Y; VI++;
-        Vertices[VI].Position[0] = BotL_X; Vertices[VI].Position[1] = BotL_Y; VI++;
-        Vertices[VI].Position[0] = TopR_X; Vertices[VI].Position[1] = TopR_Y; VI++;
-        Vertices[VI].Position[0] = BotR_X; Vertices[VI].Position[1] = BotR_Y; VI++;
+        Vertices[VI].Position[0] = X0 + PerpX; Vertices[VI].Position[1] = Y0 + PerpY; VI++;
+        Vertices[VI].Position[0] = X1 + PerpX; Vertices[VI].Position[1] = Y1 + PerpY; VI++;
+        Vertices[VI].Position[0] = X0 - PerpX; Vertices[VI].Position[1] = Y0 - PerpY; VI++;
+        Vertices[VI].Position[0] = X0 - PerpX; Vertices[VI].Position[1] = Y0 - PerpY; VI++;
+        Vertices[VI].Position[0] = X1 + PerpX; Vertices[VI].Position[1] = Y1 + PerpY; VI++;
+        Vertices[VI].Position[0] = X1 - PerpX; Vertices[VI].Position[1] = Y1 - PerpY; VI++;
         *VertexIndex = VI;
     }
 }

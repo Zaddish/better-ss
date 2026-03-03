@@ -887,8 +887,6 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                             else {
                                 Sel->SnapAxis = 2;
                                 Sel->SnapAxisValue = Sel->SnapStartX;
-                                if(Sel->IsAnnotating && Sel->CurrentAnnotationIndex < Sel->AnnotationCount)
-                                    Sel->Annotations[Sel->CurrentAnnotationIndex].Vertical = 1;
                             }
                         }
                     }
