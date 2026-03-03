@@ -658,6 +658,7 @@ static void ShowOverlay(betterss_state *State) {
     SetForegroundWindow(State->Window);
     BringWindowToTop(State->Window);
     SetCapture(State->Window);
+    ClipCursor(0);
 
     SetCursor(State->CursorCross);
 
