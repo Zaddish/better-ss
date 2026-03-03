@@ -86,7 +86,8 @@ static void AnnotationUpdate(selection_state *Selection, int X, int Y) {
         line_point *LastPoint = &Entry->Points[Entry->PointCount - 1];
         int DX = X - LastPoint->X;
         int DY = Y - LastPoint->Y;
-        if(DX * DX + DY * DY < 4) return;
+        int MinDist = (Entry->Type == ANNOTATION_HIGHLIGHT) ? 400 : 4;
+        if(DX * DX + DY * DY < MinDist) return;
     }
     
     //TODO(zaddish): let the user know we hit capacity, or remove the LRU line
