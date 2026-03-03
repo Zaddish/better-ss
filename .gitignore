@@ -7,3 +7,4 @@ compile_flags.txt
 *.ilk
 *_vs.h
 *_ps.h
+src/build_info.h

@@ -72,8 +72,9 @@ static int CopyPixelsToClipboard(void *Pixels, uint32_t Width, uint32_t Height, 
 
     if(Opened) {
         EmptyClipboard();
-        SetClipboardData(CF_DIB, hMem);
+        HANDLE Result = SetClipboardData(CF_DIB, hMem);
         CloseClipboard();
+        if(!Result) { GlobalFree(hMem); return(0); }
         return(1);
     }
 

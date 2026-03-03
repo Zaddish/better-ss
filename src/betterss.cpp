@@ -20,6 +20,7 @@
 #include "betterss_capture.h"
 #include "betterss_selection.h"
 #include "betterss_output.h"
+#include "build_info.h"
 
 static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, RECT MonitorBounds, 
     int VirtScreenLeft, int VirtScreenTop, DXGI_MODE_ROTATION Rotation, float DimFactor);
@@ -274,7 +275,9 @@ static void RegisterCurrentHotkey(betterss_state *State) {
 }
 
 static void UpdateTrayTip(betterss_state *State) {
-    wchar_t Tip[256] = L"BetterSS\nCapture: ";
+    wchar_t Tip[256] = L"BetterSS ";
+    wcscat_internal(Tip, 256, BuildGitHashW);
+    wcscat_internal(Tip, 256, L"\nCapture: ");
     wchar_t HotkeyStr[64];
     GetHotkeyString(&State->CaptureHotkey, HotkeyStr, 64);
     wcscat_internal(Tip, 256, HotkeyStr);
@@ -312,7 +315,12 @@ static void AppendHotkeyMenuItem(HMENU Menu, UINT Id, const wchar_t *Label, hotk
 
 static void ShowTrayMenu(betterss_state *State) {
     HMENU Menu = CreatePopupMenu();
-    
+
+    wchar_t VersionLabel[128] = L"BetterSS ";
+    wcscat_internal(VersionLabel, 128, BuildGitHashW);
+    AppendMenuW(Menu, MF_STRING | MF_GRAYED, 0, VersionLabel);
+    AppendMenuW(Menu, MF_SEPARATOR, 0, 0);
+
     AppendHotkeyMenuItem(Menu, IDM_CHANGEHOTKEY, L"Capture Hotkey", &State->CaptureHotkey);
     AppendHotkeyMenuItem(Menu, IDM_CHANGESAVEHOTKEY, L"Save Hotkey", &State->SaveHotkey);
     
