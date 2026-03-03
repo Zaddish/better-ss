@@ -149,7 +149,10 @@ static void ReleaseRenderer(betterss_renderer *Renderer) {
     if(Renderer->HighlightTexture.Texture) Renderer->HighlightTexture.Texture->Release();
     if(Renderer->SceneCopy.SRV) Renderer->SceneCopy.SRV->Release();
     if(Renderer->SceneCopy.Texture) Renderer->SceneCopy.Texture->Release();
-    
+
+    for EachCount(i, MODE_LABEL_COUNT) ReleaseModeLabel(&Renderer->ModeLabels[i]);
+    if(Renderer->AlphaBlend) Renderer->AlphaBlend->Release();
+
     if(Renderer->SwapChain) Renderer->SwapChain->Release();
     if(Renderer->Context1) Renderer->Context1->Release();
     if(Renderer->Context) Renderer->Context->Release();
@@ -360,10 +363,18 @@ static void EmitHighlightSegments(line_vertex *Vertices, int *VertexIndex,
             Y1 = RawY1;
         }
 
-        float TopL_X = X0 + Tilt;  float TopL_Y = Y0 - HalfHeight;
-        float TopR_X = X1 + Tilt;  float TopR_Y = Y1 - HalfHeight;
-        float BotL_X = X0;         float BotL_Y = Y0 + HalfHeight;
-        float BotR_X = X1;         float BotR_Y = Y1 + HalfHeight;
+        float TopL_X, TopL_Y, TopR_X, TopR_Y, BotL_X, BotL_Y, BotR_X, BotR_Y;
+        if(Entry->Vertical) {
+            TopL_X = X0 - HalfHeight; TopL_Y = Y0 + Tilt;
+            TopR_X = X1 - HalfHeight; TopR_Y = Y1 + Tilt;
+            BotL_X = X0 + HalfHeight; BotL_Y = Y0;
+            BotR_X = X1 + HalfHeight; BotR_Y = Y1;
+        } else {
+            TopL_X = X0 + Tilt;  TopL_Y = Y0 - HalfHeight;
+            TopR_X = X1 + Tilt;  TopR_Y = Y1 - HalfHeight;
+            BotL_X = X0;         BotL_Y = Y0 + HalfHeight;
+            BotR_X = X1;         BotR_Y = Y1 + HalfHeight;
+        }
 
         int VI = *VertexIndex;
         Vertices[VI].Position[0] = TopL_X; Vertices[VI].Position[1] = TopL_Y; VI++;
@@ -528,4 +539,144 @@ static void RenderAnnotations(betterss_renderer *R, selection_state *Selection,
     }
 
     R->Context->RSSetState(0);
+}
+
+static mode_label BakeModeLabel(ID3D11Device *Device, const wchar_t *Text, int FontHeight) {
+    mode_label Result = {};
+    if(!Device) return Result;
+
+    HDC Dc = CreateCompatibleDC(0);
+    if(!Dc) return Result;
+
+    HFONT Font = CreateFontW(-FontHeight, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH, L"Segoe UI");
+    HFONT OldFont = (HFONT)SelectObject(Dc, Font);
+
+    SIZE TextSize;
+    int Len = 0;
+    for(const wchar_t *P = Text; *P; P++) Len++;
+    GetTextExtentPoint32W(Dc, Text, Len, &TextSize);
+
+    int TexW = TextSize.cx;
+    int TexH = TextSize.cy;
+    if(TexW <= 0 || TexH <= 0) {
+        SelectObject(Dc, OldFont);
+        DeleteObject(Font);
+        DeleteDC(Dc);
+        return Result;
+    }
+
+    BITMAPINFO Bmi = {};
+    Bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    Bmi.bmiHeader.biWidth = TexW;
+    Bmi.bmiHeader.biHeight = -TexH;
+    Bmi.bmiHeader.biPlanes = 1;
+    Bmi.bmiHeader.biBitCount = 32;
+    Bmi.bmiHeader.biCompression = BI_RGB;
+
+    uint32_t *Bits = 0;
+    HBITMAP Bitmap = CreateDIBSection(Dc, &Bmi, DIB_RGB_COLORS, (void **)&Bits, 0, 0);
+    if(!Bitmap || !Bits) {
+        SelectObject(Dc, OldFont);
+        DeleteObject(Font);
+        DeleteDC(Dc);
+        return Result;
+    }
+
+    HBITMAP OldBitmap = (HBITMAP)SelectObject(Dc, Bitmap);
+    SetTextColor(Dc, RGB(255, 255, 255));
+    SetBkMode(Dc, TRANSPARENT);
+
+    RECT DrawRect = {0, 0, TexW, TexH};
+    DrawTextW(Dc, Text, Len, &DrawRect, DT_LEFT | DT_TOP | DT_NOCLIP);
+    GdiFlush();
+
+    for(int i = 0; i < TexW * TexH; i++) {
+        uint32_t Pixel = Bits[i];
+        uint8_t R = (uint8_t)(Pixel & 0xFF);
+        uint8_t G = (uint8_t)((Pixel >> 8) & 0xFF);
+        uint8_t B = (uint8_t)((Pixel >> 16) & 0xFF);
+        uint8_t A = (R > G) ? ((R > B) ? R : B) : ((G > B) ? G : B);
+        Bits[i] = (A << 24) | (A << 16) | (A << 8) | A;
+    }
+
+    D3D11_TEXTURE2D_DESC TexDesc = {};
+    TexDesc.Width = (UINT)TexW;
+    TexDesc.Height = (UINT)TexH;
+    TexDesc.MipLevels = 1;
+    TexDesc.ArraySize = 1;
+    TexDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    TexDesc.SampleDesc.Count = 1;
+    TexDesc.Usage = D3D11_USAGE_IMMUTABLE;
+    TexDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA InitData = {};
+    InitData.pSysMem = Bits;
+    InitData.SysMemPitch = (UINT)(TexW * 4);
+
+    Device->CreateTexture2D(&TexDesc, &InitData, &Result.Texture);
+    if(Result.Texture) {
+        Device->CreateShaderResourceView(Result.Texture, 0, &Result.SRV);
+        Result.Width = TexW;
+        Result.Height = TexH;
+    }
+
+    SelectObject(Dc, OldBitmap);
+    SelectObject(Dc, OldFont);
+    DeleteObject(Bitmap);
+    DeleteObject(Font);
+    DeleteDC(Dc);
+    return Result;
+}
+
+static void ReleaseModeLabel(mode_label *Label) {
+    if(Label->SRV) Label->SRV->Release();
+    if(Label->Texture) Label->Texture->Release();
+    *Label = {};
+}
+
+static void RenderModeLabel(betterss_renderer *R, mode_label *Label, int CursorX, int CursorY,
+                            int ScreenWidth, int ScreenHeight) {
+    if(!Label->SRV || !R->VertexShader || !R->OverlayShader || !R->AlphaBlend) return;
+
+    int OffX = Label->Height;
+    int OffY = -(Label->Height * 3 / 2);
+    int QX = CursorX + OffX;
+    int QY = CursorY + OffY;
+    if(QX + Label->Width > ScreenWidth) QX = ScreenWidth - Label->Width;
+    if(QY < 0) QY = CursorY + Label->Height / 2;
+    if(QX < 0) QX = 0;
+
+    D3D11_VIEWPORT Viewport = {};
+    Viewport.TopLeftX = (float)QX;
+    Viewport.TopLeftY = (float)QY;
+    Viewport.Width = (float)Label->Width;
+    Viewport.Height = (float)Label->Height;
+    Viewport.MaxDepth = 1.0f;
+    R->Context->RSSetViewports(1, &Viewport);
+
+    overlay_const_buffer Constants = {};
+    Constants.DimFactor = 1.0f;
+    Constants.TexelSize[0] = 1.0f / (float)Label->Width;
+    Constants.TexelSize[1] = 1.0f / (float)Label->Height;
+    UpdateConstantBuffer(R->Context, R->ConstantBuffer, &Constants, sizeof(Constants));
+
+    R->Context->IASetInputLayout(0);
+    R->Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    R->Context->VSSetShader(R->VertexShader, 0, 0);
+    R->Context->PSSetShader(R->OverlayShader, 0, 0);
+    R->Context->PSSetConstantBuffers(0, 1, &R->ConstantBuffer);
+    R->Context->PSSetSamplers(0, 1, &R->Sampler);
+    R->Context->PSSetShaderResources(0, 1, &Label->SRV);
+
+    float BlendFactor[4] = {};
+    R->Context->OMSetBlendState(R->AlphaBlend, BlendFactor, 0xFFFFFFFF);
+
+    R->Context->Draw(3, 0);
+
+    R->Context->OMSetBlendState(0, BlendFactor, 0xFFFFFFFF);
+
+    ID3D11ShaderResourceView *NullSRV = 0;
+    R->Context->PSSetShaderResources(0, 1, &NullSRV);
 }

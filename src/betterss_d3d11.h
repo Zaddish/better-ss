@@ -29,6 +29,16 @@ struct line_vertex
     float Position[2];
 };
 
+struct mode_label
+{
+    ID3D11Texture2D *Texture;
+    ID3D11ShaderResourceView *SRV;
+    int Width;
+    int Height;
+};
+
+#define MODE_LABEL_COUNT 3
+
 struct betterss_renderer
 {
     ID3D11Device *Device;
@@ -68,6 +78,9 @@ struct betterss_renderer
     ID3D11Buffer *CompositeConstantBuffer;
     cached_texture HighlightTexture;
     cached_texture SceneCopy;
+
+    mode_label ModeLabels[MODE_LABEL_COUNT];
+    ID3D11BlendState *AlphaBlend;
 };
 
 static int RendererIsValid(betterss_renderer *Renderer);
@@ -83,3 +96,7 @@ static ID3D11Texture2D *GetCachedTexture(betterss_renderer *R, betterss_renderer
 static void ComposeMonitorsToRT(betterss_renderer *R, capture_state *C,
                                 int OriginX, int OriginY,
                                 RECT SelectRect, float DimFactor);
+static mode_label BakeModeLabel(ID3D11Device *Device, const wchar_t *Text, int FontHeight);
+static void RenderModeLabel(betterss_renderer *R, mode_label *Label, int CursorX, int CursorY,
+                            int ScreenWidth, int ScreenHeight);
+static void ReleaseModeLabel(mode_label *Label);

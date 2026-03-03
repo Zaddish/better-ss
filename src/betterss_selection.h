@@ -24,6 +24,7 @@ struct annotation_entry
     int PointCount;
     int PointCapacity;
     int X0, Y0, X1, Y1;
+    int Vertical;
 };
 
 struct selection_state
@@ -46,7 +47,11 @@ struct selection_state
     int CensorStartX;
     int CensorStartY;
 
-    int StraightHighlightY;
+    int AnnotationMode; // 0=line, 1=highlight, 2=censor
+    int SnapAxis;       // 0=none, 1=locked-Y, 2=locked-X
+    int SnapAxisValue;
+    int SnapStartX;
+    int SnapStartY;
 };
 
 static void SelectionReset(selection_state *Selection);

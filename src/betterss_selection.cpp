@@ -100,7 +100,8 @@ static void AnnotationUpdate(selection_state *Selection, int X, int Y) {
 static void AnnotationEnd(selection_state *Selection) {
     Selection->IsAnnotating = 0;
     Selection->CurrentAnnotationIndex = 0;
-    Selection->StraightHighlightY = 0;
+    Selection->SnapAxis = 0;
+    Selection->SnapAxisValue = 0;
 }
 
 static void AnnotationUndo(selection_state *Selection) {
@@ -144,4 +145,6 @@ static void CensorUpdate(selection_state *Selection, int X, int Y) {
 static void CensorEnd(selection_state *Selection) {
     Selection->IsCensoring = 0;
     Selection->CurrentAnnotationIndex = 0;
+    Selection->SnapAxis = 0;
+    Selection->SnapAxisValue = 0;
 }

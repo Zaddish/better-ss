@@ -242,9 +242,11 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int Code, WPARAM WParam, LPARAM LPa
         return(1);
     }
 
-    if(State->IsCapturing && VK == VK_ESCAPE) {
-        PostMessageW(State->Window, WM_KEYDOWN, VK_ESCAPE, 0);
-        return(1);
+    if(State->IsCapturing) {
+        if(VK == VK_ESCAPE || (VK >= '1' && VK <= '3')) {
+            PostMessageW(State->Window, WM_KEYDOWN, VK, 0);
+            return(1);
+        }
     }
 
     if(!State->IsCapturing && !State->IsCapturingHotkey) {
@@ -555,6 +557,8 @@ static void FinaliseCapture(betterss_state *State, RECT Region, selection_state 
     HideOverlay(State);
 }
 
+static const wchar_t *ModeLabelText[MODE_LABEL_COUNT] = {L"LINE", L"HIGHLIGHT", L"CENSOR"};
+
 static void InitializeShaders(betterss_renderer *R) {
     R->Device->CreateVertexShader(
         BetterSSVSBytes, sizeof(BetterSSVSBytes), 0, &R->VertexShader);
@@ -564,6 +568,26 @@ static void InitializeShaders(betterss_renderer *R) {
         BetterSSLineVSBytes, sizeof(BetterSSLineVSBytes),
         BetterSSLinePSBytes, sizeof(BetterSSLinePSBytes),
         BetterSSCompositePSBytes, sizeof(BetterSSCompositePSBytes));
+
+    HDC ScreenDC = GetDC(0);
+    int DPI = GetDeviceCaps(ScreenDC, LOGPIXELSY);
+    ReleaseDC(0, ScreenDC);
+    int FontHeight = MulDiv(12, DPI, 72);
+
+    for EachCount(i, MODE_LABEL_COUNT) {
+        R->ModeLabels[i] = BakeModeLabel(R->Device, ModeLabelText[i], FontHeight);
+    }
+
+    D3D11_BLEND_DESC BlendDesc = {};
+    BlendDesc.RenderTarget[0].BlendEnable = TRUE;
+    BlendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+    BlendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    BlendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    BlendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    BlendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    BlendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    BlendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    R->Device->CreateBlendState(&BlendDesc, &R->AlphaBlend);
 }
 
 static void ShowOverlay(betterss_state *State) {
@@ -606,8 +630,11 @@ static void ShowOverlay(betterss_state *State) {
     State->SnapHeldMods = GetCurrentMods();
     State->LiveMods = State->SnapHeldMods;
     State->LastSnapEntry = 0;
-    State->LastMouseX = 0;
-    State->LastMouseY = 0;
+    POINT CursorPos;
+    GetCursorPos(&CursorPos);
+    ScreenToClient(State->Window, &CursorPos);
+    State->LastMouseX = CursorPos.x;
+    State->LastMouseY = CursorPos.y;
     State->WindowEntries = PushArray(&State->CaptureArena, window_entry, MAX_WINDOW_ENTRIES);
     State->WindowEntryCount = 0;
     if(State->WindowEntries) {
@@ -746,6 +773,16 @@ static int RenderOverlay(betterss_state *State) {
     
     RenderAnnotations(R, State->Selection, 0, 0, R->Width, R->Height);
 
+    int Mode = State->Selection->AnnotationMode;
+    if(Mode >= 0 && Mode < MODE_LABEL_COUNT && R->ModeLabels[Mode].SRV) {
+        Viewport.Width = (float)R->Width;
+        Viewport.Height = (float)R->Height;
+        Viewport.MaxDepth = 1.0f;
+        R->Context->RSSetViewports(1, &Viewport);
+        R->Context->OMSetRenderTargets(1, &R->RenderTarget, 0);
+        RenderModeLabel(R, &R->ModeLabels[Mode], State->LastMouseX, State->LastMouseY, R->Width, R->Height);
+    }
+
     return RendererPresent(R);
 }
 
@@ -825,28 +862,49 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
             if(State->IsCapturing) {
                 int X = (short)LOWORD(LParam);
                 int Y = (short)HIWORD(LParam);
-                
+                State->LastMouseX = X;
+                State->LastMouseY = Y;
+
                 if(State->Selection->IsDragging) {
                     SelectionUpdate(State->Selection, X, Y);
                     UpdateOverlayShader(State);
                     RefreshOverlay(State);
                 }
-                else if(State->Selection->IsCensoring) {
-                    CensorUpdate(State->Selection, X, Y);
-                    RefreshOverlay(State);
-                }
-                else if(State->Selection->IsAnnotating) {
-                    int DrawY = State->Selection->StraightHighlightY ? State->Selection->StraightHighlightY : Y;
-                    AnnotationUpdate(State->Selection, X, DrawY);
+                else if(State->Selection->IsCensoring || State->Selection->IsAnnotating) {
+                    int DrawX = X;
+                    int DrawY = Y;
+                    selection_state *Sel = State->Selection;
+
+                    if(Sel->SnapAxis == -1) {
+                        int DX = X - Sel->SnapStartX;
+                        int DY = Y - Sel->SnapStartY;
+                        if(DX * DX + DY * DY > 100) {
+                            if(DX * DX >= DY * DY) {
+                                Sel->SnapAxis = 1;
+                                Sel->SnapAxisValue = Sel->SnapStartY;
+                            }
+                            else {
+                                Sel->SnapAxis = 2;
+                                Sel->SnapAxisValue = Sel->SnapStartX;
+                                if(Sel->IsAnnotating && Sel->CurrentAnnotationIndex < Sel->AnnotationCount)
+                                    Sel->Annotations[Sel->CurrentAnnotationIndex].Vertical = 1;
+                            }
+                        }
+                    }
+
+                    if(Sel->SnapAxis == 1) DrawY = Sel->SnapAxisValue;
+                    else if(Sel->SnapAxis == 2) DrawX = Sel->SnapAxisValue;
+
+                    if(Sel->IsCensoring) CensorUpdate(Sel, DrawX, DrawY);
+                    else                 AnnotationUpdate(Sel, DrawX, DrawY);
                     RefreshOverlay(State);
                 }
                 else {
                     UpdateSnapEnabled(State);
                     if(State->SnapEnabled) {
-                        State->LastMouseX = X;
-                        State->LastMouseY = Y;
                         UpdateSnapPreview(State, X, Y);
                     }
+                    RefreshOverlay(State);
                 }
             }
         } break;
@@ -869,19 +927,23 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
             if(State->IsCapturing) {
                 int X = (short)LOWORD(LParam);
                 int Y = (short)HIWORD(LParam);
-                if((GetKeyState(VK_SHIFT) & 0x8000) && (GetKeyState(VK_MENU) & 0x8000)) {
-                    AnnotationBegin(State->Selection, X, Y, ANNOTATION_HIGHLIGHT);
-                    State->Selection->StraightHighlightY = Y;
-                }
-                else if(GetKeyState(VK_SHIFT) & 0x8000) {
+                int Mode = State->Selection->AnnotationMode;
+                int CtrlHeld = GetKeyState(VK_CONTROL) & 0x8000;
+
+                if(Mode == 2) {
                     CensorBegin(State->Selection, X, Y);
                 }
-                else if(GetKeyState(VK_MENU) & 0x8000) {
-                    AnnotationBegin(State->Selection, X, Y, ANNOTATION_HIGHLIGHT);
-                }
                 else {
-                    AnnotationBegin(State->Selection, X, Y, ANNOTATION_LINE);
+                    annotation_type Type = (Mode == 1) ? ANNOTATION_HIGHLIGHT : ANNOTATION_LINE;
+                    AnnotationBegin(State->Selection, X, Y, Type);
                 }
+
+                if(CtrlHeld && Mode != 2) {
+                    State->Selection->SnapStartX = X;
+                    State->Selection->SnapStartY = Y;
+                    State->Selection->SnapAxis = -1;
+                }
+
                 SetCursor(State->CursorSizeAll);
             }
         } break;
@@ -921,12 +983,32 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 
         case WM_KEYDOWN: {
             if(State->IsCapturing) {
+                int MidStroke = State->Selection->IsAnnotating || State->Selection->IsCensoring || State->Selection->IsDragging;
                 if(WParam == VK_ESCAPE) {
                     SelectionReset(State->Selection);
                     HideOverlay(State);
                 }
                 else if(WParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) {
                     AnnotationUndo(State->Selection);
+                    RefreshOverlay(State);
+                }
+                else if(!MidStroke && WParam >= '1' && WParam <= '3') {
+                    State->Selection->AnnotationMode = (int)(WParam - '1');
+                    RefreshOverlay(State);
+                }
+            }
+        } break;
+
+        case WM_MOUSEWHEEL: {
+            if(State->IsCapturing) {
+                int MidStroke = State->Selection->IsAnnotating || State->Selection->IsCensoring || State->Selection->IsDragging;
+                if(!MidStroke) {
+                    int Delta = GET_WHEEL_DELTA_WPARAM(WParam);
+                    int Mode = State->Selection->AnnotationMode;
+                    Mode += (Delta > 0) ? -1 : 1;
+                    if(Mode < 0) Mode = 2;
+                    if(Mode > 2) Mode = 0;
+                    State->Selection->AnnotationMode = Mode;
                     RefreshOverlay(State);
                 }
             }
