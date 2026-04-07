@@ -63,11 +63,10 @@ static IDXGISwapChain2 *AcquireSwapChain(ID3D11Device *Device, HWND Window) {
             SwapChainDesc.SampleDesc.Count = 1;
             SwapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
             SwapChainDesc.BufferCount = 2;
-            SwapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+            SwapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
             SwapChainDesc.Scaling = DXGI_SCALING_NONE;
             SwapChainDesc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-            SwapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT | 
-                                  DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+            SwapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
 
             IDXGISwapChain1 *SwapChain1 = 0;
             if(SUCCEEDED(DxgiFactory->CreateSwapChainForHwnd(Device, Window, &SwapChainDesc, 0, 0, &SwapChain1))) {
@@ -99,8 +98,7 @@ static void RendererResize(betterss_renderer *Renderer, uint32_t Width, uint32_t
     Renderer->Context->Flush();
 
     HRESULT hr = Renderer->SwapChain->ResizeBuffers(0, Width, Height, 
-        DXGI_FORMAT_UNKNOWN, 
-        DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT | DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING);
+        DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
     if(FAILED(hr)) {
         ReleaseRenderer(Renderer);
         return;
@@ -207,7 +205,7 @@ static betterss_renderer AcquireRenderer(HWND Window) {
 }
 
 static int RendererPresent(betterss_renderer *Renderer) {
-    HRESULT hr = Renderer->SwapChain->Present(0, DXGI_PRESENT_ALLOW_TEARING);
+    HRESULT hr = Renderer->SwapChain->Present(0, 0);
 
     if((hr == DXGI_ERROR_DEVICE_RESET) || (hr == DXGI_ERROR_DEVICE_REMOVED)) {
         HRESULT Reason = Renderer->Device->GetDeviceRemovedReason();
@@ -217,10 +215,6 @@ static int RendererPresent(betterss_renderer *Renderer) {
         return(0);
     }
 
-    if(Renderer->RenderTarget) {
-        Renderer->Context1->DiscardView(Renderer->RenderTarget);
-    }
-    
     return(1);
 }
 
