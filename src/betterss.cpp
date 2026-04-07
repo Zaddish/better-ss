@@ -991,8 +991,16 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
             if(State->IsCapturing) {
                 int MidStroke = State->Selection->IsAnnotating || State->Selection->IsCensoring || State->Selection->IsDragging;
                 if(WParam == VK_ESCAPE) {
-                    SelectionReset(State->Selection);
-                    HideOverlay(State);
+                    if(State->Selection->IsDragging) {
+                        SelectionEnd(State->Selection);
+                        SelectionSetRect(State->Selection, {});
+                        UpdateOverlayShader(State);
+                        RefreshOverlay(State);
+                    }
+                    else {
+                        SelectionReset(State->Selection);
+                        HideOverlay(State);
+                    }
                 }
                 else if(WParam == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) {
                     AnnotationUndo(State->Selection);
