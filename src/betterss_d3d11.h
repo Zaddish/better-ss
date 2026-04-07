@@ -43,8 +43,7 @@ struct betterss_renderer
 {
     ID3D11Device *Device;
     ID3D11DeviceContext *Context;
-    ID3D11DeviceContext1 *Context1;
-    IDXGISwapChain2 *SwapChain;
+    IDXGISwapChain1 *SwapChain;
     ID3D11RenderTargetView *RenderTarget;
     ID3D11VertexShader *VertexShader;
     ID3D11PixelShader *OverlayShader;
@@ -87,6 +86,8 @@ struct betterss_renderer
 static int RendererIsValid(betterss_renderer *Renderer);
 static betterss_renderer AcquireRenderer(HWND Window);
 static void ReleaseRenderer(betterss_renderer *Renderer);
+static void ReleaseSwapChain(betterss_renderer *R);
+static int AcquireSwapChainForRenderer(betterss_renderer *R, HWND Window);
 static void RendererResize(betterss_renderer *Renderer, uint32_t Width, uint32_t Height);
 static int RendererPresent(betterss_renderer *Renderer);
 static void RenderAnnotations(betterss_renderer *R, selection_state *Selection,

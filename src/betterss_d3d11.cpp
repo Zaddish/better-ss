@@ -52,8 +52,8 @@ static IDXGIFactory2 *AcquireDXGIFactory(ID3D11Device *Device) {
     return(Result);
 }
 
-static IDXGISwapChain2 *AcquireSwapChain(ID3D11Device *Device, HWND Window) {
-    IDXGISwapChain2 *Result = 0;
+static IDXGISwapChain1 *AcquireSwapChain(ID3D11Device *Device, HWND Window) {
+    IDXGISwapChain1 *Result = 0;
 
     if(Device) {
         IDXGIFactory2 *DxgiFactory = AcquireDXGIFactory(Device);
@@ -63,17 +63,12 @@ static IDXGISwapChain2 *AcquireSwapChain(ID3D11Device *Device, HWND Window) {
             SwapChainDesc.SampleDesc.Count = 1;
             SwapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
             SwapChainDesc.BufferCount = 2;
-            SwapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+            SwapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
             SwapChainDesc.Scaling = DXGI_SCALING_NONE;
             SwapChainDesc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-            SwapChainDesc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
 
-            IDXGISwapChain1 *SwapChain1 = 0;
-            if(SUCCEEDED(DxgiFactory->CreateSwapChainForHwnd(Device, Window, &SwapChainDesc, 0, 0, &SwapChain1))) {
-                if(SUCCEEDED(SwapChain1->QueryInterface(IID_PPV_ARGS(&Result)))) {
-                    DxgiFactory->MakeWindowAssociation(Window, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
-                }
-                SwapChain1->Release();
+            if(SUCCEEDED(DxgiFactory->CreateSwapChainForHwnd(Device, Window, &SwapChainDesc, 0, 0, &Result))) {
+                DxgiFactory->MakeWindowAssociation(Window, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
             }
             DxgiFactory->Release();
         }
@@ -89,6 +84,17 @@ static void ReleaseRenderTarget(betterss_renderer *Renderer) {
     }
 }
 
+static void ReleaseSwapChain(betterss_renderer *R) {
+    ReleaseRenderTarget(R);
+    if(R->Context) {
+        R->Context->ClearState();
+        R->Context->Flush();
+    }
+    if(R->SwapChain) { R->SwapChain->Release(); R->SwapChain = 0; }
+    R->Width = 0;
+    R->Height = 0;
+}
+
 static void RendererResize(betterss_renderer *Renderer, uint32_t Width, uint32_t Height) {
     if(Width == 0 || Height == 0) return;
     if(Width == Renderer->Width && Height == Renderer->Height) return;
@@ -97,8 +103,7 @@ static void RendererResize(betterss_renderer *Renderer, uint32_t Width, uint32_t
     ReleaseRenderTarget(Renderer);
     Renderer->Context->Flush();
 
-    HRESULT hr = Renderer->SwapChain->ResizeBuffers(0, Width, Height, 
-        DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
+    HRESULT hr = Renderer->SwapChain->ResizeBuffers(0, Width, Height, DXGI_FORMAT_UNKNOWN, 0);
     if(FAILED(hr)) {
         ReleaseRenderer(Renderer);
         return;
@@ -155,7 +160,6 @@ static void ReleaseRenderer(betterss_renderer *Renderer) {
     if(Renderer->AlphaBlend) Renderer->AlphaBlend->Release();
 
     if(Renderer->SwapChain) Renderer->SwapChain->Release();
-    if(Renderer->Context1) Renderer->Context1->Release();
     if(Renderer->Context) Renderer->Context->Release();
     if(Renderer->Device) Renderer->Device->Release();
 
@@ -177,23 +181,21 @@ static betterss_renderer AcquireRenderer(HWND Window) {
     }
 
     if(SUCCEEDED(hr)) {
-        if(SUCCEEDED(Result.Context->QueryInterface(IID_PPV_ARGS(&Result.Context1)))) {
-            Result.SwapChain = AcquireSwapChain(Result.Device, Window);
-            if(Result.SwapChain) {
-                CreateDynamicBuffer(Result.Device, &Result.ConstantBuffer, 
-                    sizeof(overlay_const_buffer), D3D11_BIND_CONSTANT_BUFFER);
+        Result.SwapChain = AcquireSwapChain(Result.Device, Window);
+        if(Result.SwapChain) {
+            CreateDynamicBuffer(Result.Device, &Result.ConstantBuffer, 
+                sizeof(overlay_const_buffer), D3D11_BIND_CONSTANT_BUFFER);
 
-                D3D11_SAMPLER_DESC SamplerDesc = {};
-                SamplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-                SamplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-                SamplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-                SamplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-                Result.Device->CreateSamplerState(&SamplerDesc, &Result.Sampler);
+            D3D11_SAMPLER_DESC SamplerDesc = {};
+            SamplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+            SamplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+            SamplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+            SamplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+            Result.Device->CreateSamplerState(&SamplerDesc, &Result.Sampler);
 
-                RECT ClientRect;
-                GetClientRect(Window, &ClientRect);
-                RendererResize(&Result, ClientRect.right, ClientRect.bottom);
-            }
+            RECT ClientRect;
+            GetClientRect(Window, &ClientRect);
+            RendererResize(&Result, ClientRect.right, ClientRect.bottom);
         }
     }
 
@@ -202,6 +204,15 @@ static betterss_renderer AcquireRenderer(HWND Window) {
     }
 
     return(Result);
+}
+
+static int AcquireSwapChainForRenderer(betterss_renderer *R, HWND Window) {
+    R->SwapChain = AcquireSwapChain(R->Device, Window);
+    if(!R->SwapChain) return(0);
+    RECT ClientRect;
+    GetClientRect(Window, &ClientRect);
+    RendererResize(R, ClientRect.right, ClientRect.bottom);
+    return(R->RenderTarget != 0);
 }
 
 static int RendererPresent(betterss_renderer *Renderer) {

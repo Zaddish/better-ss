@@ -138,9 +138,9 @@ done:
     return(Result);
 }
 
-static output_pixels AcquireSelectionPixels(betterss_renderer *R, capture_state *C, RECT Selection, selection_state *S) {
+static output_pixels AcquireSelectionPixels(betterss_renderer *R, RECT Selection, selection_state *S) {
     output_pixels Result = {};
-    if(!R || !R->Device || !R->Context || !C) return(Result);
+    if(!R || !R->Device || !R->Context) return(Result);
     if(!R->CachedBackground.Texture) return(Result);
 
     int SelWidth = Selection.right - Selection.left;

@@ -27,10 +27,6 @@ static void ReleaseDuplications(capture_state *Capture) {
     Capture->Device = 0;
 }
 
-static void ReleaseCaptureState(capture_state *Capture) {
-    ReleaseDuplications(Capture);
-}
-
 static int RefreshCaptureState(capture_state *Capture, ID3D11Device *Device) {
     ReleaseDuplications(Capture);
     
@@ -169,16 +165,5 @@ static int CaptureAllMonitors(capture_state *Capture) {
     }
 
     if(AccessLost) return(-1);
-
-    for EachIndex(i, Capture->MonitorCount) {
-        monitor_duplication *Mon = &Capture->Monitors[i];
-        if(!Mon->HasFrame && Mon->IsValid) {
-            int MonResult = CaptureMonitor(Mon, Capture->Device, 500);
-            if(MonResult == -1) AccessLost = 1;
-            else if(MonResult == 1) Result = 1;
-        }
-    }
-    if(AccessLost) return(-1);
-
     return(Result);
 }

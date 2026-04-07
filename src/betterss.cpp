@@ -22,8 +22,6 @@
 #include "betterss_output.h"
 #include "build_info.h"
 
-static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, float DimFactor);
-
 #include "betterss_d3d11.cpp"
 #include "betterss_capture.cpp"
 #include "betterss_selection.cpp"
@@ -69,7 +67,6 @@ static void wcscpy_internal(wchar_t *Dest, size_t DestSize, const wchar_t *Src) 
     wcscat_internal(Dest, DestSize, Src);
 }
 
-static void UpdateOverlayShader(betterss_state *State);
 static int RenderOverlay(betterss_state *State);
 static void RefreshOverlay(betterss_state *State);
 static void HideOverlay(betterss_state *State);
@@ -86,7 +83,7 @@ static void UpdateTrayTip(betterss_state *State);
 static const wchar_t *RegistryKeyPath = L"Software\\BetterSS";
 static const wchar_t *StartupKeyPath = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
-static HWND g_HookTargetWindow = 0;
+static betterss_state *g_HookState = 0;
 
 typedef BOOL WINAPI set_process_dpi_aware(void);
 typedef BOOL WINAPI set_process_dpi_awareness_context(DPI_AWARENESS_CONTEXT);
@@ -187,24 +184,13 @@ static UINT ModifierFromVK(UINT VK) {
     return(0);
 }
 
-static UINT GetCurrentMods(void) {
-    UINT Mods = 0;
-    if((GetAsyncKeyState(VK_LCONTROL) | GetAsyncKeyState(VK_RCONTROL)) & 0x8000) Mods |= MOD_CONTROL;
-    if((GetAsyncKeyState(VK_LSHIFT) | GetAsyncKeyState(VK_RSHIFT)) & 0x8000) Mods |= MOD_SHIFT;
-    if((GetAsyncKeyState(VK_LMENU) | GetAsyncKeyState(VK_RMENU)) & 0x8000) Mods |= MOD_ALT;
-    if((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) Mods |= MOD_WIN;
-    return Mods;
-}
-
 static int HotkeyMatches(hotkey_binding *H, UINT VK, UINT Mods) {
     return(VK == H->VK && Mods == H->Mods);
 }
 
 static LRESULT CALLBACK LowLevelKeyboardProc(int Code, WPARAM WParam, LPARAM LParam) {
     if(Code < 0) return(CallNextHookEx(0, Code, WParam, LParam));
-    if(!g_HookTargetWindow) return(CallNextHookEx(0, Code, WParam, LParam));
-
-    betterss_state *State = (betterss_state *)GetWindowLongPtrW(g_HookTargetWindow, GWLP_USERDATA);
+    betterss_state *State = g_HookState;
     if(!State) return(CallNextHookEx(0, Code, WParam, LParam));
 
     KBDLLHOOKSTRUCT *Kbd = (KBDLLHOOKSTRUCT *)LParam;
@@ -226,7 +212,7 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int Code, WPARAM WParam, LPARAM LPa
 
     if(State->IsCapturingHotkey && State->HotkeyDialog) {
         hotkey_binding *Target = State->ConfiguringSaveHotkey ? &State->SaveHotkey : &State->CaptureHotkey;
-        Target->Mods = GetCurrentMods();
+        Target->Mods = State->LiveMods;
         Target->VK = VK;
 
         SaveSettings(State);
@@ -249,13 +235,12 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int Code, WPARAM WParam, LPARAM LPa
     }
 
     if(!State->IsCapturing && !State->IsCapturingHotkey) {
-        UINT Mods = GetCurrentMods();
-        if(HotkeyMatches(&State->CaptureHotkey, VK, Mods)) {
+        if(HotkeyMatches(&State->CaptureHotkey, VK, State->LiveMods)) {
             State->CaptureMode = 0;
             PostMessageW(State->Window, WM_HOTKEY, 0, 0);
             return(1);
         }
-        if(HotkeyMatches(&State->SaveHotkey, VK, Mods)) {
+        if(HotkeyMatches(&State->SaveHotkey, VK, State->LiveMods)) {
             State->CaptureMode = 1;
             PostMessageW(State->Window, WM_HOTKEY, 0, 0);
             return(1);
@@ -345,13 +330,10 @@ static LRESULT CALLBACK HotkeyDialogProc(HWND Window, UINT Message, WPARAM WPara
     switch(Message) {
         case WM_KILLFOCUS:
         case WM_CLOSE: {
-            if(g_HookTargetWindow) {
-                betterss_state *State = (betterss_state *)GetWindowLongPtrW(g_HookTargetWindow, GWLP_USERDATA);
-                if(State) {
-                    State->IsCapturingHotkey = 0;
-                    State->ConfiguringSaveHotkey = 0;
-                    State->HotkeyDialog = 0;
-                }
+            if(g_HookState) {
+                g_HookState->IsCapturingHotkey = 0;
+                g_HookState->ConfiguringSaveHotkey = 0;
+                g_HookState->HotkeyDialog = 0;
             }
             DestroyWindow(Window);
         } break;
@@ -509,7 +491,6 @@ static void UpdateSnapPreview(betterss_state *State, int MouseX, int MouseY) {
             if(Current.left != Target.left || Current.top != Target.top ||
                Current.right != Target.right || Current.bottom != Target.bottom) {
                 SelectionSetRect(State->Selection, Target);
-                UpdateOverlayShader(State);
                 RefreshOverlay(State);
             }
             return;
@@ -521,7 +502,6 @@ static void UpdateSnapPreview(betterss_state *State, int MouseX, int MouseY) {
 
     if(Current.right > Current.left || Current.bottom > Current.top) {
         SelectionSetRect(State->Selection, {});
-        UpdateOverlayShader(State);
         RefreshOverlay(State);
     }
 }
@@ -540,19 +520,16 @@ static int PromptForSaveFile(HWND Window, wchar_t *File, DWORD FileCount) {
 }
 
 static void FinaliseCapture(betterss_state *State, RECT Region, selection_state *Annotations) {
-    if(State->CaptureMode == 1) {
-        wchar_t File[MAX_PATH] = L"screenshot.png";
-        if(PromptForSaveFile(State->Window, File, ArrayCount(File))) {
-            output_pixels Pixels = AcquireSelectionPixels(State->Renderer, State->Capture, Region, Annotations);
-            WritePixelsToFile(State->WICFactory, Pixels, File);
-            ReleaseOutputPixels(&Pixels);
-        }
+    wchar_t File[MAX_PATH] = L"screenshot.png";
+    if(State->CaptureMode == 1 && !PromptForSaveFile(State->Window, File, ArrayCount(File))) {
+        HideOverlay(State);
+        return;
     }
-    else {
-        output_pixels Pixels = AcquireSelectionPixels(State->Renderer, State->Capture, Region, Annotations);
-        WritePixelsToClipboard(Pixels);
-        ReleaseOutputPixels(&Pixels);
-    }
+
+    output_pixels Pixels = AcquireSelectionPixels(State->Renderer, Region, Annotations);
+    if(State->CaptureMode == 1) WritePixelsToFile(State->WICFactory, Pixels, File);
+    else                        WritePixelsToClipboard(Pixels);
+    ReleaseOutputPixels(&Pixels);
     HideOverlay(State);
 }
 
@@ -590,11 +567,14 @@ static void InitializeShaders(betterss_renderer *R) {
 }
 
 static void ShowOverlay(betterss_state *State) {
-    if(!RendererIsValid(State->Renderer)) {
+    if(!State->Renderer->Device) {
         *State->Renderer = AcquireRenderer(State->Window);
         if(!RendererIsValid(State->Renderer)) return;
         InitializeShaders(State->Renderer);
         ReleaseDuplications(State->Capture);
+    }
+    else if(!State->Renderer->SwapChain) {
+        if(!AcquireSwapChainForRenderer(State->Renderer, State->Window)) return;
     }
 
     // Ensure we have valid capture state
@@ -633,8 +613,7 @@ static void ShowOverlay(betterss_state *State) {
     AnnotationInit(State->Selection, &State->CaptureArena);
 
     State->SnapEnabled = 0;
-    State->SnapHeldMods = GetCurrentMods();
-    State->LiveMods = State->SnapHeldMods;
+    State->SnapHeldMods = State->LiveMods;
     State->LastSnapEntry = 0;
     POINT CursorPos;
     GetCursorPos(&CursorPos);
@@ -658,7 +637,6 @@ static void ShowOverlay(betterss_state *State) {
         return;
     }
 
-    CloakWindow(State->Window, FALSE);
     ShowWindow(State->Window, SW_SHOW);
     SetForegroundWindow(State->Window);
     BringWindowToTop(State->Window);
@@ -673,37 +651,14 @@ static void ShowOverlay(betterss_state *State) {
 
 static void HideOverlay(betterss_state *State) {
     ReleaseCapture();
-    CloakWindow(State->Window, TRUE);
     ShowWindow(State->Window, SW_HIDE);
 
-    ReleaseAllFrames(State->Capture);
     SelectionReset(State->Selection);
+    ReleaseSwapChain(State->Renderer);
 
     SetCursor(State->CursorArrow);
 
     State->IsCapturing = 0;
-}
-
-static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, float DimFactor) {
-    float W = (float)R->Width;
-    float H = (float)R->Height;
-
-    overlay_const_buffer Constants = {};
-    Constants.SelectionRect[0] = (float)SelectRect.left / W;
-    Constants.SelectionRect[1] = (float)SelectRect.top / H;
-    Constants.SelectionRect[2] = (float)(SelectRect.right - SelectRect.left) / W;
-    Constants.SelectionRect[3] = (float)(SelectRect.bottom - SelectRect.top) / H;
-    Constants.DimFactor = DimFactor;
-    Constants.TexelSize[0] = 1.0f / W;
-    Constants.TexelSize[1] = 1.0f / H;
-    Constants.Rotation = 0.0f;
-
-    UpdateConstantBuffer(R->Context, R->ConstantBuffer, &Constants, sizeof(Constants));
-}
-
-static void UpdateOverlayShader(betterss_state *State) {
-    RECT SelectRect = SelectionGetRect(State->Selection);
-    UpdateOverlayConstBuffer(State->Renderer, SelectRect, 0.4f);
 }
 
 static void CacheMonitorBackground(betterss_renderer *R, capture_state *C) {
@@ -768,7 +723,17 @@ static int RenderOverlay(betterss_state *State) {
     R->Context->RSSetViewports(1, &Viewport);
 
     RECT SelectRect = SelectionGetRect(State->Selection);
-    UpdateOverlayConstBuffer(R, SelectRect, 0.4f);
+    float W = (float)R->Width;
+    float H = (float)R->Height;
+    overlay_const_buffer Constants = {};
+    Constants.SelectionRect[0] = (float)SelectRect.left / W;
+    Constants.SelectionRect[1] = (float)SelectRect.top / H;
+    Constants.SelectionRect[2] = (float)(SelectRect.right - SelectRect.left) / W;
+    Constants.SelectionRect[3] = (float)(SelectRect.bottom - SelectRect.top) / H;
+    Constants.DimFactor = 0.4f;
+    Constants.TexelSize[0] = 1.0f / W;
+    Constants.TexelSize[1] = 1.0f / H;
+    UpdateConstantBuffer(R->Context, R->ConstantBuffer, &Constants, sizeof(Constants));
 
     R->Context->VSSetShader(R->VertexShader, 0, 0);
     R->Context->PSSetShader(R->OverlayShader, 0, 0);
@@ -783,11 +748,6 @@ static int RenderOverlay(betterss_state *State) {
 
     int Mode = State->Selection->AnnotationMode;
     if(Mode >= 0 && Mode < MODE_LABEL_COUNT && R->ModeLabels[Mode].SRV) {
-        Viewport.Width = (float)R->Width;
-        Viewport.Height = (float)R->Height;
-        Viewport.MaxDepth = 1.0f;
-        R->Context->RSSetViewports(1, &Viewport);
-        R->Context->OMSetRenderTargets(1, &R->RenderTarget, 0);
         RenderModeLabel(R, &R->ModeLabels[Mode], State->LastMouseX, State->LastMouseY, R->Width, R->Height);
     }
 
@@ -875,7 +835,6 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 
                 if(State->Selection->IsDragging) {
                     SelectionUpdate(State->Selection, X, Y);
-                    UpdateOverlayShader(State);
                     RefreshOverlay(State);
                 }
                 else if(State->Selection->IsCensoring || State->Selection->IsAnnotating) {
@@ -994,7 +953,6 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                     if(State->Selection->IsDragging) {
                         SelectionEnd(State->Selection);
                         SelectionSetRect(State->Selection, {});
-                        UpdateOverlayShader(State);
                         RefreshOverlay(State);
                     }
                     else {
@@ -1087,7 +1045,7 @@ void WinMainCRTStartup(void) {
     RegisterClassExW(&HotkeyDialogWc);
 
     State->Window = Window;
-    g_HookTargetWindow = Window;
+    g_HookState = State;
 
     *State->Renderer = AcquireRenderer(Window);
     if(!RendererIsValid(State->Renderer)) ExitProcess(2);
@@ -1095,7 +1053,6 @@ void WinMainCRTStartup(void) {
 
     if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) ExitProcess(3);
 
-    CloakWindow(Window, TRUE);
     ShowWindow(Window, SW_HIDE);
 
     CreateTrayIcon(State, Instance);
@@ -1113,7 +1070,7 @@ void WinMainCRTStartup(void) {
         State->KeyboardHook = 0;
     }
     RemoveTrayIcon(State);
-    ReleaseCaptureState(State->Capture);
+    ReleaseDuplications(State->Capture);
     ReleaseRenderer(State->Renderer);
     
     if(State->WICFactory) {

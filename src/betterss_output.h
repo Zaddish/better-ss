@@ -21,7 +21,7 @@ struct output_pixels
     betterss_renderer *Renderer;
 };
 
-static output_pixels AcquireSelectionPixels(betterss_renderer *R, capture_state *C, RECT Selection, selection_state *S);
+static output_pixels AcquireSelectionPixels(betterss_renderer *R, RECT Selection, selection_state *S);
 static void ReleaseOutputPixels(output_pixels *P);
 
 static int WritePixelsToClipboard(output_pixels Pixels);

@@ -26,6 +26,5 @@ struct capture_state
 static int CaptureIsValid(capture_state *Capture);
 static int RefreshCaptureState(capture_state *Capture, ID3D11Device *Device);
 static void ReleaseDuplications(capture_state *Capture);
-static void ReleaseCaptureState(capture_state *Capture);
 static int CaptureAllMonitors(capture_state *Capture);
 static void ReleaseAllFrames(capture_state *Capture);
