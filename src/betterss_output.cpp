@@ -141,30 +141,28 @@ done:
 static output_pixels AcquireSelectionPixels(betterss_renderer *R, capture_state *C, RECT Selection, selection_state *S) {
     output_pixels Result = {};
     if(!R || !R->Device || !R->Context || !C) return(Result);
+    if(!R->CachedBackground.Texture) return(Result);
 
     int SelWidth = Selection.right - Selection.left;
     int SelHeight = Selection.bottom - Selection.top;
     if(SelWidth <= 0 || SelHeight <= 0) return(Result);
 
-    RECT SelScreen;
-    SelScreen.left = Selection.left + C->VirtualScreen.left;
-    SelScreen.top = Selection.top + C->VirtualScreen.top;
-    SelScreen.right = Selection.right + C->VirtualScreen.left;
-    SelScreen.bottom = Selection.bottom + C->VirtualScreen.top;
-
     ID3D11Texture2D *RenderTexture = GetCachedTexture(R, &R->CachedRender, (uint32_t)SelWidth, (uint32_t)SelHeight,
         D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0);
     if(!RenderTexture || !R->CachedRender.RTV) return(Result);
 
-    R->Context->OMSetRenderTargets(1, &R->CachedRender.RTV, 0);
-    float ClearColor[4] = {};
-    R->Context->ClearRenderTargetView(R->CachedRender.RTV, ClearColor);
-
-    RECT NoSelection = {};
-    ComposeMonitorsToRT(R, C, SelScreen.left, SelScreen.top, NoSelection, 1.0f);
+    D3D11_BOX SrcBox = {};
+    SrcBox.left = (UINT)Selection.left;
+    SrcBox.top = (UINT)Selection.top;
+    SrcBox.right = (UINT)Selection.right;
+    SrcBox.bottom = (UINT)Selection.bottom;
+    SrcBox.back = 1;
+    R->Context->CopySubresourceRegion(RenderTexture, 0, 0, 0, 0, R->CachedBackground.Texture, 0, &SrcBox);
 
     int HasAnnotations = S && S->AnnotationCount > 0;
     if(HasAnnotations) {
+        R->Context->OMSetRenderTargets(1, &R->CachedRender.RTV, 0);
+
         D3D11_VIEWPORT Viewport = {};
         Viewport.Width = (float)SelWidth;
         Viewport.Height = (float)SelHeight;
@@ -172,10 +170,10 @@ static output_pixels AcquireSelectionPixels(betterss_renderer *R, capture_state 
         R->Context->RSSetViewports(1, &Viewport);
 
         RenderAnnotations(R, S, -Selection.left, -Selection.top, SelWidth, SelHeight);
-    }
 
-    ID3D11RenderTargetView *NullRTV = 0;
-    R->Context->OMSetRenderTargets(1, &NullRTV, 0);
+        ID3D11RenderTargetView *NullRTV = 0;
+        R->Context->OMSetRenderTargets(1, &NullRTV, 0);
+    }
 
     ID3D11Texture2D *Staging = GetCachedTexture(R, &R->CachedStaging, (uint32_t)SelWidth, (uint32_t)SelHeight,
         D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ);

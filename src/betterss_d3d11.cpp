@@ -149,6 +149,9 @@ static void ReleaseRenderer(betterss_renderer *Renderer) {
     if(Renderer->HighlightTexture.Texture) Renderer->HighlightTexture.Texture->Release();
     if(Renderer->SceneCopy.SRV) Renderer->SceneCopy.SRV->Release();
     if(Renderer->SceneCopy.Texture) Renderer->SceneCopy.Texture->Release();
+    if(Renderer->CachedBackground.SRV) Renderer->CachedBackground.SRV->Release();
+    if(Renderer->CachedBackground.RTV) Renderer->CachedBackground.RTV->Release();
+    if(Renderer->CachedBackground.Texture) Renderer->CachedBackground.Texture->Release();
 
     for EachCount(i, MODE_LABEL_COUNT) ReleaseModeLabel(&Renderer->ModeLabels[i]);
     if(Renderer->AlphaBlend) Renderer->AlphaBlend->Release();

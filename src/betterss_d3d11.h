@@ -78,6 +78,7 @@ struct betterss_renderer
     ID3D11Buffer *CompositeConstantBuffer;
     cached_texture HighlightTexture;
     cached_texture SceneCopy;
+    cached_texture CachedBackground;
 
     mode_label ModeLabels[MODE_LABEL_COUNT];
     ID3D11BlendState *AlphaBlend;
@@ -93,9 +94,7 @@ static void RenderAnnotations(betterss_renderer *R, selection_state *Selection,
 static ID3D11Texture2D *GetCachedTexture(betterss_renderer *R, betterss_renderer::cached_texture *Cache,
                                           uint32_t Width, uint32_t Height,
                                           D3D11_USAGE Usage, UINT BindFlags, UINT CPUAccess);
-static void ComposeMonitorsToRT(betterss_renderer *R, capture_state *C,
-                                int OriginX, int OriginY,
-                                RECT SelectRect, float DimFactor);
+static void CacheMonitorBackground(betterss_renderer *R, capture_state *C);
 static mode_label BakeModeLabel(ID3D11Device *Device, const wchar_t *Text, int FontHeight);
 static void RenderModeLabel(betterss_renderer *R, mode_label *Label, int CursorX, int CursorY,
                             int ScreenWidth, int ScreenHeight);

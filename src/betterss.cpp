@@ -22,8 +22,7 @@
 #include "betterss_output.h"
 #include "build_info.h"
 
-static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, RECT MonitorBounds, 
-    int VirtScreenLeft, int VirtScreenTop, DXGI_MODE_ROTATION Rotation, float DimFactor);
+static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, float DimFactor);
 
 #include "betterss_d3d11.cpp"
 #include "betterss_capture.cpp"
@@ -622,6 +621,13 @@ static void ShowOverlay(betterss_state *State) {
         return;
     }
 
+    CacheMonitorBackground(State->Renderer, State->Capture);
+    ReleaseAllFrames(State->Capture);
+
+    if(!State->Renderer->CachedBackground.SRV) {
+        return;
+    }
+
     ArenaReset(&State->CaptureArena);
     SelectionReset(State->Selection);
     AnnotationInit(State->Selection, &State->CaptureArena);
@@ -648,7 +654,6 @@ static void ShowOverlay(betterss_state *State) {
         State->WindowEntryCount = Ctx.Count;
     }
 
-    UpdateOverlayShader(State);
     if(!RenderOverlay(State)) {
         return;
     }
@@ -679,46 +684,44 @@ static void HideOverlay(betterss_state *State) {
     State->IsCapturing = 0;
 }
 
-static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, RECT MonitorBounds, 
-    int VirtScreenLeft, int VirtScreenTop, DXGI_MODE_ROTATION Rotation, float DimFactor) {
-    int MonW = MonitorBounds.right - MonitorBounds.left;
-    int MonH = MonitorBounds.bottom - MonitorBounds.top;
-    int MonOffsetX = MonitorBounds.left - VirtScreenLeft;
-    int MonOffsetY = MonitorBounds.top - VirtScreenTop;
-
-    float SelLeft = (float)(SelectRect.left - MonOffsetX) / (float)MonW;
-    float SelTop = (float)(SelectRect.top - MonOffsetY) / (float)MonH;
-    float SelWidth = (float)(SelectRect.right - SelectRect.left) / (float)MonW;
-    float SelHeight = (float)(SelectRect.bottom - SelectRect.top) / (float)MonH;
+static void UpdateOverlayConstBuffer(betterss_renderer *R, RECT SelectRect, float DimFactor) {
+    float W = (float)R->Width;
+    float H = (float)R->Height;
 
     overlay_const_buffer Constants = {};
-    Constants.SelectionRect[0] = SelLeft;
-    Constants.SelectionRect[1] = SelTop;
-    Constants.SelectionRect[2] = SelWidth;
-    Constants.SelectionRect[3] = SelHeight;
+    Constants.SelectionRect[0] = (float)SelectRect.left / W;
+    Constants.SelectionRect[1] = (float)SelectRect.top / H;
+    Constants.SelectionRect[2] = (float)(SelectRect.right - SelectRect.left) / W;
+    Constants.SelectionRect[3] = (float)(SelectRect.bottom - SelectRect.top) / H;
     Constants.DimFactor = DimFactor;
-    Constants.TexelSize[0] = 1.0f / (float)MonW;
-    Constants.TexelSize[1] = 1.0f / (float)MonH;
-    Constants.Rotation = (float)Rotation;
+    Constants.TexelSize[0] = 1.0f / W;
+    Constants.TexelSize[1] = 1.0f / H;
+    Constants.Rotation = 0.0f;
 
     UpdateConstantBuffer(R->Context, R->ConstantBuffer, &Constants, sizeof(Constants));
 }
 
 static void UpdateOverlayShader(betterss_state *State) {
     RECT SelectRect = SelectionGetRect(State->Selection);
-    RECT DefaultBounds = {0, 0, (LONG)State->Renderer->Width, (LONG)State->Renderer->Height};
-    UpdateOverlayConstBuffer(State->Renderer, SelectRect, DefaultBounds, 
-        State->Capture->VirtualScreen.left, State->Capture->VirtualScreen.top, 
-        DXGI_MODE_ROTATION_IDENTITY, 0.4f);
+    UpdateOverlayConstBuffer(State->Renderer, SelectRect, 0.4f);
 }
 
-static void ComposeMonitorsToRT(betterss_renderer *R, capture_state *C,
-                                int OriginX, int OriginY,
-                                RECT SelectRect, float DimFactor) {
+static void CacheMonitorBackground(betterss_renderer *R, capture_state *C) {
+    GetCachedTexture(R, &R->CachedBackground, R->Width, R->Height,
+        D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0);
+    if(!R->CachedBackground.RTV) return;
+
+    R->Context->OMSetRenderTargets(1, &R->CachedBackground.RTV, 0);
+    float Black[4] = {};
+    R->Context->ClearRenderTargetView(R->CachedBackground.RTV, Black);
+
     R->Context->VSSetShader(R->VertexShader, 0, 0);
     R->Context->PSSetShader(R->OverlayShader, 0, 0);
     R->Context->PSSetConstantBuffers(0, 1, &R->ConstantBuffer);
     R->Context->PSSetSamplers(0, 1, &R->Sampler);
+
+    int OriginX = C->VirtualScreen.left;
+    int OriginY = C->VirtualScreen.top;
 
     for EachIndex(i, C->MonitorCount) {
         monitor_duplication *Mon = &C->Monitors[i];
@@ -735,17 +738,26 @@ static void ComposeMonitorsToRT(betterss_renderer *R, capture_state *C,
         MonViewport.MaxDepth = 1.0f;
         R->Context->RSSetViewports(1, &MonViewport);
 
-        UpdateOverlayConstBuffer(R, SelectRect, Mon->Bounds, OriginX, OriginY, Mon->Rotation, DimFactor);
+        overlay_const_buffer Constants = {};
+        Constants.DimFactor = 1.0f;
+        Constants.TexelSize[0] = 1.0f / (float)MonW;
+        Constants.TexelSize[1] = 1.0f / (float)MonH;
+        Constants.Rotation = (float)Mon->Rotation;
+        UpdateConstantBuffer(R->Context, R->ConstantBuffer, &Constants, sizeof(Constants));
 
         R->Context->PSSetShaderResources(0, 1, &Mon->SRV);
         R->Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         R->Context->Draw(3, 0);
     }
+
+    ID3D11RenderTargetView *NullRTV = 0;
+    R->Context->OMSetRenderTargets(1, &NullRTV, 0);
 }
 
 static int RenderOverlay(betterss_state *State) {
     betterss_renderer *R = State->Renderer;
     if(!R->Context || !R->RenderTarget) return(0);
+    if(!R->CachedBackground.SRV || !R->VertexShader || !R->OverlayShader) return(0);
 
     R->Context->OMSetRenderTargets(1, &R->RenderTarget, 0);
 
@@ -755,23 +767,18 @@ static int RenderOverlay(betterss_state *State) {
     Viewport.MaxDepth = 1.0f;
     R->Context->RSSetViewports(1, &Viewport);
 
-    float ClearColor[4] = {0.2f, 0.2f, 0.2f, 1.0f};
-    R->Context->ClearRenderTargetView(R->RenderTarget, ClearColor);
-
-    if(!R->VertexShader || !R->OverlayShader) {
-        return RendererPresent(R);
-    }
-
     RECT SelectRect = SelectionGetRect(State->Selection);
-    ComposeMonitorsToRT(R, State->Capture, 
-        State->Capture->VirtualScreen.left, State->Capture->VirtualScreen.top,
-        SelectRect, 0.4f);
+    UpdateOverlayConstBuffer(R, SelectRect, 0.4f);
 
-    Viewport.Width = (float)R->Width;
-    Viewport.Height = (float)R->Height;
-    Viewport.MaxDepth = 1.0f;
-    R->Context->RSSetViewports(1, &Viewport);
-    
+    R->Context->VSSetShader(R->VertexShader, 0, 0);
+    R->Context->PSSetShader(R->OverlayShader, 0, 0);
+    R->Context->PSSetConstantBuffers(0, 1, &R->ConstantBuffer);
+    R->Context->PSSetSamplers(0, 1, &R->Sampler);
+    R->Context->PSSetShaderResources(0, 1, &R->CachedBackground.SRV);
+    R->Context->IASetInputLayout(0);
+    R->Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    R->Context->Draw(3, 0);
+
     RenderAnnotations(R, State->Selection, 0, 0, R->Width, R->Height);
 
     int Mode = State->Selection->AnnotationMode;
