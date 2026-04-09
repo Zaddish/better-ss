@@ -463,8 +463,8 @@ static BOOL CALLBACK CollectWindowEntries(HWND Hwnd, LPARAM LParam) {
 
 static window_entry *FindWindowEntryAtPoint(window_entry *Entries, int Count, int X, int Y) {
     for EachCount(i, Count) {
-        if(X >= Entries[i].SnapBounds.left && X < Entries[i].SnapBounds.right &&
-           Y >= Entries[i].SnapBounds.top && Y < Entries[i].SnapBounds.bottom) {
+        if((unsigned)(X - Entries[i].SnapBounds.left) < (unsigned)(Entries[i].SnapBounds.right - Entries[i].SnapBounds.left) &&
+           (unsigned)(Y - Entries[i].SnapBounds.top) < (unsigned)(Entries[i].SnapBounds.bottom - Entries[i].SnapBounds.top)) {
             return(&Entries[i]);
         }
     }
@@ -846,14 +846,11 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                         int DX = X - Sel->SnapStartX;
                         int DY = Y - Sel->SnapStartY;
                         if(DX * DX + DY * DY > 100) {
-                            if(DX * DX >= DY * DY) {
-                                Sel->SnapAxis = 1;
-                                Sel->SnapAxisValue = Sel->SnapStartY;
-                            }
-                            else {
-                                Sel->SnapAxis = 2;
-                                Sel->SnapAxisValue = Sel->SnapStartX;
-                            }
+                            int absDX = (DX ^ (DX >> 31)) - (DX >> 31);
+                            int absDY = (DY ^ (DY >> 31)) - (DY >> 31);
+                            int IsVertical = absDY > absDX;
+                            Sel->SnapAxis = 1 + IsVertical;
+                            Sel->SnapAxisValue = IsVertical ? Sel->SnapStartX : Sel->SnapStartY;
                         }
                     }
 
@@ -977,7 +974,8 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                 if(!MidStroke) {
                     int Delta = GET_WHEEL_DELTA_WPARAM(WParam);
                     int Mode = State->Selection->AnnotationMode;
-                    Mode += (Delta > 0) ? -1 : 1;
+                    // NOTE(zaddish): assumes Delta != 0
+                    Mode -= (Delta >> 31) | 1;
                     if(Mode < 0) Mode = 2;
                     if(Mode > 2) Mode = 0;
                     State->Selection->AnnotationMode = Mode;

@@ -6,7 +6,7 @@
 #include <tmmintrin.h>
 
 static int CopyPixelsToClipboard(void *Pixels, uint32_t Width, uint32_t Height, uint32_t Pitch) {
-    uint32_t RowSize = ((Width * 3 + 3) / 4) * 4;
+    uint32_t RowSize = (Width * 3 + 3) & ~3u;
     uint32_t DataSize = RowSize * Height;
     uint32_t HeaderSize = sizeof(BITMAPINFOHEADER);
 
@@ -51,6 +51,15 @@ static int CopyPixelsToClipboard(void *Pixels, uint32_t Width, uint32_t Height, 
             _mm_storeu_si128((__m128i *)(DstRow + x * 3 + 32), _mm_or_si128(_mm_srli_si128(s2, 8), _mm_slli_si128(s3, 4)));
         }
 
+        uint32_t ScalarEnd = Width & ~3u;
+        for(; x < ScalarEnd; x += 4) {
+            uint32_t *S = (uint32_t *)(SrcRow + x * 4);
+            uint8_t  *D = DstRow + x * 3;
+            uint32_t p0 = S[0], p1 = S[1], p2 = S[2], p3 = S[3];
+            *(uint32_t *)(D + 0) = (p0 & 0x00FFFFFF) | (p1 << 24);
+            *(uint32_t *)(D + 4) = ((p1 >> 8) & 0x0000FFFF) | (p2 << 16);
+            *(uint32_t *)(D + 8) = ((p2 >> 16) & 0x000000FF) | (p3 << 8);
+        }
         for(; x < Width; x++) {
             uint8_t *SrcPx = SrcRow + x * 4;
             uint8_t *DstPx = DstRow + x * 3;
