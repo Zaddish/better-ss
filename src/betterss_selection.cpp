@@ -21,25 +21,14 @@ static void SelectionEnd(selection_state *Selection) {
 
 static RECT SelectionGetRect(selection_state *Selection) {
     RECT Result;
-
-    if(Selection->StartX < Selection->CurrentX) {
-        Result.left = Selection->StartX;
-        Result.right = Selection->CurrentX;
-    }
-    else {
-        Result.left = Selection->CurrentX;
-        Result.right = Selection->StartX;
-    }
-
-    if(Selection->StartY < Selection->CurrentY) {
-        Result.top = Selection->StartY;
-        Result.bottom = Selection->CurrentY;
-    }
-    else {
-        Result.top = Selection->CurrentY;
-        Result.bottom = Selection->StartY;
-    }
-
+    int dx = Selection->StartX - Selection->CurrentX;
+    int dy = Selection->StartY - Selection->CurrentY;
+    int mx = dx & (dx >> 31);
+    int my = dy & (dy >> 31);
+    Result.left   = Selection->CurrentX + mx;
+    Result.right  = Selection->StartX   - mx;
+    Result.top    = Selection->CurrentY + my;
+    Result.bottom = Selection->StartY   - my;
     return(Result);
 }
 
