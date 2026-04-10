@@ -1104,8 +1104,8 @@ void WinMainCRTStartup(void) {
         State->KeyboardHook = 0;
     }
     RemoveTrayIcon(State);
-    ReleaseNvCapture(State->Nvapi);
     ArenaRelease(&State->Nvapi->ConvertArena);
+    ReleaseNvCapture(State->Nvapi);
     ReleaseDuplications(State->Capture);
     ReleaseRenderer(State->Renderer);
     

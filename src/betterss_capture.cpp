@@ -2,21 +2,28 @@ static int CaptureIsValid(capture_state *Capture) {
     return(Capture->MonitorCount > 0);
 }
 
+static void ReleaseFrame(monitor_duplication *Mon) {
+    if(Mon->HasFrame) {
+        if(Mon->SRV) {
+            Mon->SRV->Release();
+            Mon->SRV = 0;
+        }
+        if(Mon->Texture) {
+            Mon->Texture->Release();
+            Mon->Texture = 0;
+        }
+        Mon->Duplication->ReleaseFrame();
+        Mon->HasFrame = 0;
+    }
+}
+
 static void ReleaseMonitorDuplication(monitor_duplication *Mon) {
-    if(Mon->SRV) {
-        Mon->SRV->Release();
-        Mon->SRV = 0;
-    }
-    if(Mon->Texture) {
-        Mon->Texture->Release();
-        Mon->Texture = 0;
-    }
+    ReleaseFrame(Mon);
     if(Mon->Duplication) {
         Mon->Duplication->Release();
         Mon->Duplication = 0;
     }
     Mon->IsValid = 0;
-    Mon->HasFrame = 0;
 }
 
 static void ReleaseDuplications(capture_state *Capture) {
@@ -25,6 +32,12 @@ static void ReleaseDuplications(capture_state *Capture) {
     }
     Capture->MonitorCount = 0;
     Capture->Device = 0;
+}
+
+static void ReleaseAllFrames(capture_state *Capture) {
+    for EachIndex(i, Capture->MonitorCount) {
+        ReleaseFrame(&Capture->Monitors[i]);
+    }
 }
 
 static int RefreshCaptureState(capture_state *Capture, ID3D11Device *Device) {
@@ -79,27 +92,6 @@ static int RefreshCaptureState(capture_state *Capture, ID3D11Device *Device) {
     DxgiDevice->Release();
 
     return(Capture->MonitorCount > 0 ? 1 : 0);
-}
-
-static void ReleaseFrame(monitor_duplication *Mon) {
-    if(Mon->HasFrame) {
-        if(Mon->SRV) {
-            Mon->SRV->Release();
-            Mon->SRV = 0;
-        }
-        if(Mon->Texture) {
-            Mon->Texture->Release();
-            Mon->Texture = 0;
-        }
-        Mon->Duplication->ReleaseFrame();
-        Mon->HasFrame = 0;
-    }
-}
-
-static void ReleaseAllFrames(capture_state *Capture) {
-    for EachIndex(i, Capture->MonitorCount) {
-        ReleaseFrame(&Capture->Monitors[i]);
-    }
 }
 
 static int CaptureMonitor(monitor_duplication *Mon, ID3D11Device *Device, UINT TimeoutMs) {
