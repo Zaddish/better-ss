@@ -117,10 +117,10 @@ static void ReleaseNvCapture(nv_capture *Nv) {
 
 // D3DDDIFMT_A2B10G10R10 (format 31): R[9:0] G[19:10] B[29:20] A[31:30] -> B8G8R8A8
 static inline uint32_t Convert10Bit(uint32_t V) {
-    uint32_t R8 = ((V >>  0) & 0x3FF) >> 2;
-    uint32_t G8 = ((V >> 10) & 0x3FF) >> 2;
-    uint32_t B8 = ((V >> 20) & 0x3FF) >> 2;
-    return(B8 | (G8 << 8) | (R8 << 16) | 0xFF000000);
+    return ((V >>  2) & 0xFF) << 16
+         | ((V >> 12) & 0xFF) <<  8
+         | ((V >> 22) & 0xFF)
+         | 0xFF000000;
 }
 
 static inline uint32_t ConvertPixel(uint32_t V, int Is10Bit) {
