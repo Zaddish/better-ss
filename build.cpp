@@ -238,6 +238,65 @@ static int GenerateBuildInfo(const char *OutputPath) {
 
 // shader cache
 
+struct shader_blob {
+    struct shader_blob_vtbl {
+        HRESULT (__stdcall *QueryInterface)(shader_blob *, REFIID, void **);
+        ULONG   (__stdcall *AddRef)(shader_blob *);
+        ULONG   (__stdcall *Release)(shader_blob *);
+        void *  (__stdcall *GetBufferPointer)(shader_blob *);
+        SIZE_T  (__stdcall *GetBufferSize)(shader_blob *);
+    };
+    shader_blob_vtbl *Vtbl;
+};
+
+#define D3DCOMPILE_OPTIMIZATION_LEVEL3 (1 << 15)
+#define D3DCOMPILE_WARNINGS_ARE_ERRORS (1 << 18)
+
+typedef HRESULT (__stdcall *d3d_compile_fn)(
+    const void *SrcData, SIZE_T SrcDataSize, const char *SourceName,
+    void *Defines, void *Include,
+    const char *Entrypoint, const char *Target,
+    UINT Flags1, UINT Flags2,
+    shader_blob **Code, shader_blob **ErrorMsgs);
+
+static d3d_compile_fn LoadD3DCompiler(void) {
+    HMODULE Dll = LoadLibraryA("d3dcompiler_47.dll");
+    if(!Dll) return(0);
+    return(d3d_compile_fn)GetProcAddress(Dll, "D3DCompile");
+}
+
+static char *ReadEntireFile(const char *Path, int *OutSize) {
+    HANDLE File = CreateFileA(Path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+    if(File == INVALID_HANDLE_VALUE) { *OutSize = 0; return(0); }
+    DWORD Size = GetFileSize(File, 0);
+    char *Data = (char *)VirtualAlloc(0, Size + 1, MEM_COMMIT, PAGE_READWRITE);
+    if(Data) {
+        DWORD Read;
+        ReadFile(File, Data, Size, &Read, 0);
+        Data[Read] = 0;
+        *OutSize = (int)Read;
+    }
+    CloseHandle(File);
+    return(Data);
+}
+
+static int WriteShaderHeader(const char *Path, const char *VarName, void *ByteCode, int ByteCodeSize) {
+    FILE *Out = fopen(Path, "w");
+    if(!Out) return(0);
+
+    fprintf(Out, "const BYTE %s[] =\n{\n", VarName);
+    unsigned char *Bytes = (unsigned char *)ByteCode;
+    for(int i = 0; i < ByteCodeSize; i++) {
+        if((i % 6) == 0) fprintf(Out, "    ");
+        fprintf(Out, "%3d", Bytes[i]);
+        if(i < ByteCodeSize - 1) fprintf(Out, ", ");
+        if((i % 6) == 5 || i == ByteCodeSize - 1) fprintf(Out, "\n");
+    }
+    fprintf(Out, "};\n");
+    fclose(Out);
+    return(1);
+}
+
 struct shader_entry {
     const char *Target;
     const char *Entry;
@@ -255,43 +314,49 @@ static shader_entry Shaders[] = {
     { "ps_5_0", "PSMain", "betterss_composite_ps.h","BetterSSCompositePSBytes","betterss_composite.hlsl","Composite PS" },
 };
 
-static int CompileShaders(const char *SrcDir) {
+static int CompileShaders(const char *SrcDir, d3d_compile_fn D3DCompile) {
+    int ShaderCount = (int)(sizeof(Shaders) / sizeof(Shaders[0]));
     int Compiled = 0;
-    int Failed = 0;
 
-    for(int i = 0; i < (int)(sizeof(Shaders) / sizeof(Shaders[0])); i++) {
+    for(int i = 0; i < ShaderCount; i++) {
         shader_entry *S = &Shaders[i];
 
         char SourcePath[MAX_PATH], OutputPath[MAX_PATH];
         snprintf(SourcePath, sizeof(SourcePath), "%s\\%s", SrcDir, S->Source);
         snprintf(OutputPath, sizeof(OutputPath), "%s\\%s", SrcDir, S->Output);
 
-        if(FileExists(OutputPath) && !IsFileNewer(SourcePath, OutputPath)) {
-            continue;
-        }
+        if(FileExists(OutputPath) && !IsFileNewer(SourcePath, OutputPath)) continue;
 
         printf("[build] compiling %s...\n", S->Label);
 
-        char Cmd[4096];
-        snprintf(Cmd, sizeof(Cmd),
-            "fxc /nologo /T %s /E %s /O3 /WX /Fh \"%s\" /Vn %s \"%s\"",
-            S->Target, S->Entry, OutputPath, S->VarName, SourcePath);
+        int SourceSize = 0;
+        char *SourceData = ReadEntireFile(SourcePath, &SourceSize);
+        if(!SourceData) { printf("[build] ERROR: failed to read %s\n", SourcePath); return(0); }
 
-        DWORD Code = RunProcess(Cmd);
-        if(Code != 0) {
-            printf("[build] ERROR: %s shader compilation failed\n", S->Label);
-            Failed = 1;
-            break;
-        }
+        shader_blob *Code = 0;
+        shader_blob *Errors = 0;
+        HRESULT hr = D3DCompile(SourceData, SourceSize, S->Source, 0, 0,
+            S->Entry, S->Target,
+            D3DCOMPILE_OPTIMIZATION_LEVEL3 | D3DCOMPILE_WARNINGS_ARE_ERRORS, 0,
+            &Code, &Errors);
+        VirtualFree(SourceData, 0, MEM_RELEASE);
+
+        int Ok = SUCCEEDED(hr) && WriteShaderHeader(OutputPath, S->VarName,
+            Code->Vtbl->GetBufferPointer(Code), (int)Code->Vtbl->GetBufferSize(Code));
+
+        if(!Ok && Errors) printf("[build] ERROR: %s:\n%s\n", S->Label,
+            (char *)Errors->Vtbl->GetBufferPointer(Errors));
+
+        if(Code) Code->Vtbl->Release(Code);
+        if(Errors) Errors->Vtbl->Release(Errors);
+        if(!Ok) return(0);
         Compiled++;
     }
 
-    if(!Failed) {
-        if(Compiled == 0) printf("[build] shaders up to date\n");
-        else              printf("[build] %d shader(s) compiled\n", Compiled);
-    }
+    if(Compiled == 0) printf("[build] shaders up to date\n");
+    else              printf("[build] %d shader(s) compiled\n", Compiled);
 
-    return !Failed;
+    return(1);
 }
 
 // main -------
@@ -314,20 +379,53 @@ int main(int Argc, char **Argv) {
 
     int IsDebug = 1;
     int IsRelease = 0;
+    int IsClean = 0;
 
     for(int i = 1; i < Argc; i++) {
         if(_stricmp(Argv[i], "release") == 0) { IsRelease = 1; IsDebug = 0; }
         if(_stricmp(Argv[i], "debug") == 0)   { IsDebug = 1; IsRelease = 0; }
+        if(_stricmp(Argv[i], "clean") == 0)   { IsClean = 1; }
     }
 
-    printf("[build] %s build\n", IsRelease ? "RELEASE" : "DEBUG");
+    printf("[build] %s build%s\n", IsRelease ? "RELEASE" : "DEBUG", IsClean ? " (clean)" : "");
+
+    LARGE_INTEGER PerfFreq, BuildStartTime;
+    QueryPerformanceFrequency(&PerfFreq);
+    QueryPerformanceCounter(&BuildStartTime);
 
     CreateDirectoryA("build", 0);
 
     char SrcDir[MAX_PATH];
     snprintf(SrcDir, sizeof(SrcDir), "%s\\src", RootDir);
 
-    if(!CompileShaders(SrcDir)) return 1;
+    if(IsClean) {
+        int ShaderCount = (int)(sizeof(Shaders) / sizeof(Shaders[0]));
+        for(int i = 0; i < ShaderCount; i++) {
+            char Path[MAX_PATH];
+            snprintf(Path, sizeof(Path), "%s\\%s", SrcDir, Shaders[i].Output);
+            DeleteFileA(Path);
+        }
+
+        char BuildInfoPath[MAX_PATH];
+        snprintf(BuildInfoPath, sizeof(BuildInfoPath), "%s\\build_info.h", SrcDir);
+        DeleteFileA(BuildInfoPath);
+
+        DeleteFileA("build\\betterss_debug.exe");
+        DeleteFileA("build\\betterss_debug.pdb");
+        DeleteFileA("build\\betterss.exe");
+        DeleteFileA("build\\betterss.pdb");
+        DeleteObjFiles();
+
+        printf("[build] cleaned\n");
+    }
+
+    d3d_compile_fn D3DCompile = LoadD3DCompiler();
+    if(!D3DCompile) {
+        printf("[build] ERROR: failed to load d3dcompiler_47.dll\n");
+        return 1;
+    }
+
+    if(!CompileShaders(SrcDir, D3DCompile)) return 1;
 
     char BuildInfoPath[MAX_PATH];
     snprintf(BuildInfoPath, sizeof(BuildInfoPath), "%s\\build_info.h", SrcDir);
@@ -360,6 +458,10 @@ int main(int Argc, char **Argv) {
         return 1;
     }
 
-    printf("[build] done: %s\n", OutName);
+    LARGE_INTEGER BuildEndTime;
+    QueryPerformanceCounter(&BuildEndTime);
+    double BuildSeconds = (double)(BuildEndTime.QuadPart - BuildStartTime.QuadPart) / (double)PerfFreq.QuadPart;
+
+    printf("[build] done: %s (%.3fs)\n", OutName, BuildSeconds);
     return 0;
 }
