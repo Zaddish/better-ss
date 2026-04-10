@@ -18,12 +18,14 @@
 #include "betterss.h"
 #include "betterss_d3d11.h"
 #include "betterss_capture.h"
+#include "betterss_nvapi.h"
 #include "betterss_selection.h"
 #include "betterss_output.h"
 #include "build_info.h"
 
 #include "betterss_d3d11.cpp"
 #include "betterss_capture.cpp"
+#include "betterss_nvapi.cpp"
 #include "betterss_selection.cpp"
 #include "betterss_output.cpp"
 
@@ -578,31 +580,44 @@ static void ShowOverlay(betterss_state *State) {
     }
 
     // Ensure we have valid capture state
-    if(!CaptureIsValid(State->Capture)) {
-        if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) {
-            return;
+    int CapturedOk = 0;
+
+    if(State->Nvapi->IsAvailable) {
+        RefreshNvMonitors(State->Nvapi);
+        CapturedOk = NvCaptureAllMonitors(State->Nvapi, State->Renderer->Device);
+        if(CapturedOk) {
+            State->Capture->VirtualScreen = State->Nvapi->VirtualScreen;
+            CacheNvBackground(State->Renderer, State->Nvapi);
         }
     }
 
-    // try to capture frames
-    int CaptureResult = CaptureAllMonitors(State->Capture);
-    
-    // on access lost, refresh duplications and retry once
-    if(CaptureResult == -1) {
-        ReleaseDuplications(State->Capture);
-        if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) {
+    if(!CapturedOk) {
+        if(!CaptureIsValid(State->Capture)) {
+            if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) {
+                return;
+            }
+        }
+
+        // try to capture frames
+        int CaptureResult = CaptureAllMonitors(State->Capture);
+
+        // on access lost, refresh the capture state and retry
+        if(CaptureResult == -1) {
+            ReleaseDuplications(State->Capture);
+            if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) {
+                return;
+            }
+            CaptureResult = CaptureAllMonitors(State->Capture);
+        }
+
+        // if still no frames, fuck you
+        if(CaptureResult <= 0) {
             return;
         }
-        CaptureResult = CaptureAllMonitors(State->Capture);
-    }
-    
-    // if still no frames, fuck you
-    if(CaptureResult <= 0) {
-        return;
-    }
 
-    CacheMonitorBackground(State->Renderer, State->Capture);
-    ReleaseAllFrames(State->Capture);
+        CacheMonitorBackground(State->Renderer, State->Capture);
+        ReleaseAllFrames(State->Capture);
+    }
 
     if(!State->Renderer->CachedBackground.SRV) {
         return;
@@ -1011,14 +1026,16 @@ void WinMainCRTStartup(void) {
     CoInitializeEx(0, COINIT_APARTMENTTHREADED);
     PreventWindowsDPIScaling();
     
-    size_t StateBlockSize = sizeof(betterss_state) + sizeof(betterss_renderer) + sizeof(capture_state) + sizeof(selection_state);
+    size_t StateBlockSize = sizeof(betterss_state) + sizeof(betterss_renderer) + sizeof(capture_state) + sizeof(selection_state) + sizeof(nv_capture);
     uint8_t *StateBlock = (uint8_t *)VirtualAlloc(0, StateBlockSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if(!StateBlock) ExitProcess(1);
 
     betterss_state *State = (betterss_state *)StateBlock;
-    State->Renderer = (betterss_renderer *)(StateBlock + sizeof(betterss_state));
-    State->Capture = (capture_state *)(StateBlock + sizeof(betterss_state) + sizeof(betterss_renderer));
-    State->Selection = (selection_state *)(StateBlock + sizeof(betterss_state) + sizeof(betterss_renderer) + sizeof(capture_state));
+    uint8_t *At = StateBlock + sizeof(betterss_state);
+    State->Renderer  = (betterss_renderer *)At; At += sizeof(betterss_renderer);
+    State->Capture   = (capture_state *)At;     At += sizeof(capture_state);
+    State->Selection = (selection_state *)At;    At += sizeof(selection_state);
+    State->Nvapi     = (nv_capture *)At;
 
     if(!ArenaInit(&State->CaptureArena, 64 * 1024 * 1024)) ExitProcess(1);
     
@@ -1051,6 +1068,9 @@ void WinMainCRTStartup(void) {
 
     if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) ExitProcess(3);
 
+    ArenaInit(&State->Nvapi->ConvertArena, 64 * 1024 * 1024);
+    InitNvCapture(State->Nvapi, State->Renderer->Device);
+
     ShowWindow(Window, SW_HIDE);
 
     CreateTrayIcon(State, Instance);
@@ -1068,6 +1088,8 @@ void WinMainCRTStartup(void) {
         State->KeyboardHook = 0;
     }
     RemoveTrayIcon(State);
+    ReleaseNvCapture(State->Nvapi);
+    ArenaRelease(&State->Nvapi->ConvertArena);
     ReleaseDuplications(State->Capture);
     ReleaseRenderer(State->Renderer);
     

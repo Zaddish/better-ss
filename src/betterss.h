@@ -22,6 +22,7 @@ struct IWICImagingFactory;
 struct betterss_renderer;
 struct capture_state;
 struct selection_state;
+struct nv_capture;
 
 // will expand if shit gets cooked with this
 #define MAX_WINDOW_ENTRIES 512
@@ -88,6 +89,7 @@ struct betterss_state
     betterss_renderer *Renderer;
     capture_state *Capture;
     selection_state *Selection;
+    nv_capture *Nvapi;
     int IsCapturing;
     
     memory_arena CaptureArena;
