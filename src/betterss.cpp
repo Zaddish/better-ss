@@ -652,6 +652,11 @@ static void ShowOverlay(betterss_state *State) {
         return;
     }
 
+    // NOTE(zaddish): we have to block until the DWM finishes its current composition pass
+    // by the time it returns, the surface the DWM has for our HWND is the correct one
+    // if we do not do this, we get a flash of the previously cached frame DWM has,
+    // and that is not very pleasant to the user. We have to wait a full vsync unfortunately
+    DwmFlush();
     ShowWindow(State->Window, SW_SHOW);
     SetForegroundWindow(State->Window);
     BringWindowToTop(State->Window);
