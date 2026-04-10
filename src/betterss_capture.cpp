@@ -110,52 +110,49 @@ static int CaptureMonitor(monitor_duplication *Mon, ID3D11Device *Device, UINT T
     IDXGIResource *Resource = 0;
     DXGI_OUTDUPL_FRAME_INFO FrameInfo;
 
-    for(int Attempt = 0; Attempt < 4; Attempt++) {
-        HRESULT hr = Mon->Duplication->AcquireNextFrame(TimeoutMs, &FrameInfo, &Resource);
+    HRESULT hr = Mon->Duplication->AcquireNextFrame(TimeoutMs, &FrameInfo, &Resource);
 
-        if(hr == DXGI_ERROR_WAIT_TIMEOUT) { return(0); }
-        if(hr == DXGI_ERROR_ACCESS_LOST) { return(-1); }
-        if(FAILED(hr)) { return(0); }
+    if(hr == DXGI_ERROR_WAIT_TIMEOUT) return(0);
+    if(hr == DXGI_ERROR_ACCESS_LOST) return(-1);
+    if(FAILED(hr)) return(0);
 
-        if(FrameInfo.LastPresentTime.QuadPart == 0) {
-            Resource->Release();
-            Mon->Duplication->ReleaseFrame();
-            Resource = 0;
-            continue;
-        }
+    hr = Resource->QueryInterface(IID_PPV_ARGS(&Mon->Texture));
+    Resource->Release();
 
-        hr = Resource->QueryInterface(IID_PPV_ARGS(&Mon->Texture));
-        Resource->Release();
+    if(SUCCEEDED(hr)) {
+        D3D11_SHADER_RESOURCE_VIEW_DESC SRVDesc = {};
+        SRVDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        SRVDesc.Texture2D.MipLevels = 1;
 
+        hr = Device->CreateShaderResourceView(Mon->Texture, &SRVDesc, &Mon->SRV);
         if(SUCCEEDED(hr)) {
-            D3D11_SHADER_RESOURCE_VIEW_DESC SRVDesc = {};
-            SRVDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            SRVDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            SRVDesc.Texture2D.MipLevels = 1;
-            
-            hr = Device->CreateShaderResourceView(Mon->Texture, &SRVDesc, &Mon->SRV);
-            if(SUCCEEDED(hr)) {
-                Mon->HasFrame = 1;
-                return(1);
-            }
-
-            Mon->Texture->Release();
-            Mon->Texture = 0;
-            Mon->Duplication->ReleaseFrame();
+            Mon->HasFrame = 1;
+            return(1);
         }
 
-        return(0);
+        Mon->Texture->Release();
+        Mon->Texture = 0;
+        Mon->Duplication->ReleaseFrame();
     }
 
     return(0);
 }
 
 static int CaptureAllMonitors(capture_state *Capture) {
+    // NOTE(zaddish): thank you gnif from Looking Glass (his comment):
+    // https://github.com/gnif/LookingGlass/blob/7f31ecf5e572ecdfa64306be76e49ee537f5fdbf/host/platform/Windows/capture/DXGI/src/dxgi.c#L1077
+    // this is a bit of a hack as it causes this thread to block until the next
+    // present, by doing this we can allow the mouse updates to accumulate instead
+    // of being called to process every single one. The only caveat is we are
+    // limited to the refresh rate of the monitor.
+    DwmFlush();
+
     int Result = 0;
     int AccessLost = 0;
 
     for EachIndex(i, Capture->MonitorCount) {
-        int MonResult = CaptureMonitor(&Capture->Monitors[i], Capture->Device, 500);
+        int MonResult = CaptureMonitor(&Capture->Monitors[i], Capture->Device, 32);
         if(MonResult == 1) {
             Result = 1;
         }
