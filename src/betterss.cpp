@@ -1079,8 +1079,8 @@ void WinMainCRTStartup(void) {
 
     if(!RefreshCaptureState(State->Capture, State->Renderer->Device)) ExitProcess(3);
 
-    ArenaInit(&State->Nvapi->ConvertArena, 64 * 1024 * 1024);
     InitNvCapture(State->Nvapi, State->Renderer->Device);
+    ArenaInit(&State->Nvapi->ConvertArena, 64 * 1024 * 1024);
 
     ShowWindow(Window, SW_HIDE);
 
