@@ -67,7 +67,7 @@ static int InitNvCapture(nv_capture *Nv, ID3D11Device *Device) {
 
     if(!IsRunningElevated()) return(0);
 
-    HMODULE Dll = LoadLibraryA("nvapi64.dll");
+    HMODULE Dll = LoadLibraryExA("nvapi64.dll", 0, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if(!Dll) return(0);
 
     NvQueryInterfaceFn QI = (NvQueryInterfaceFn)GetProcAddress(Dll, "nvapi_QueryInterface");
