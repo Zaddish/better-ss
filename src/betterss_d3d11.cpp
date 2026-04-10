@@ -10,6 +10,22 @@ static float FastSqrt(float X) {
     return Result;
 }
 
+static float FastInvSqrt(float X) {
+    float Result;
+    _mm_store_ss(&Result, _mm_rsqrt_ss(_mm_set_ss(X)));
+    return Result;
+}
+
+static uint32_t CeilPow2(uint32_t X) {
+    X -= 1;
+    X |= X >> 1;
+    X |= X >> 2;
+    X |= X >> 4;
+    X |= X >> 8;
+    X |= X >> 16;
+    return X + 1;
+}
+
 static void CreateDynamicBuffer(ID3D11Device *Device, ID3D11Buffer **Out, UINT ByteWidth, UINT BindFlags) {
     D3D11_BUFFER_DESC Desc = {};
     Desc.ByteWidth = ByteWidth;
@@ -323,11 +339,12 @@ static void EmitLineSegments(line_vertex *Vertices, int *VertexIndex,
 
         float DX = X1 - X0;
         float DY = Y1 - Y0;
-        float Len = FastSqrt(DX * DX + DY * DY);
-        if(Len < 0.001f) continue;
+        float Dist2 = DX * DX + DY * DY;
+        if(Dist2 < 0.000001f) continue;
+        float InvLen = FastInvSqrt(Dist2);
 
-        float PerpX = -DY / Len * (LineWidth * 0.5f);
-        float PerpY = DX / Len * (LineWidth * 0.5f);
+        float PerpX = -DY * InvLen * (LineWidth * 0.5f);
+        float PerpY = DX * InvLen * (LineWidth * 0.5f);
 
         int VI = *VertexIndex;
         Vertices[VI].Position[0] = X0 + PerpX; Vertices[VI].Position[1] = Y0 + PerpY; VI++;
@@ -372,11 +389,12 @@ static void EmitHighlightSegments(line_vertex *Vertices, int *VertexIndex,
 
         float DX = X1 - X0;
         float DY = Y1 - Y0;
-        float Len = FastSqrt(DX * DX + DY * DY);
-        if(Len < 0.001f) continue;
+        float Dist2 = DX * DX + DY * DY;
+        if(Dist2 < 0.000001f) continue;
+        float InvLen = FastInvSqrt(Dist2);
 
-        float PerpX = -DY / Len * HalfHeight;
-        float PerpY =  DX / Len * HalfHeight;
+        float PerpX = -DY * InvLen * HalfHeight;
+        float PerpY =  DX * InvLen * HalfHeight;
 
         int VI = *VertexIndex;
         Vertices[VI].Position[0] = X0 + PerpX; Vertices[VI].Position[1] = Y0 + PerpY; VI++;
@@ -426,7 +444,7 @@ static void RenderAnnotations(betterss_renderer *R, selection_state *Selection,
             R->LineVertexBuffer->Release();
             R->LineVertexBuffer = 0;
         }
-        R->LineVertexBufferCapacity = MaxVertices * 2;
+        R->LineVertexBufferCapacity = CeilPow2((uint32_t)MaxVertices * 2);
         CreateDynamicBuffer(R->Device, &R->LineVertexBuffer, 
             R->LineVertexBufferCapacity * sizeof(line_vertex), D3D11_BIND_VERTEX_BUFFER);
     }
