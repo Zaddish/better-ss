@@ -671,6 +671,12 @@ static void HideOverlay(betterss_state *State) {
     SelectionReset(State->Selection);
     ReleaseSwapChain(State->Renderer);
 
+    ReleaseCachedTexture(&State->Renderer->CachedBackground);
+    ReleaseCachedTexture(&State->Renderer->CachedRender);
+    ReleaseCachedTexture(&State->Renderer->CachedStaging);
+    ReleaseCachedTexture(&State->Renderer->HighlightTexture);
+    ReleaseCachedTexture(&State->Renderer->SceneCopy);
+
     SetCursor(State->CursorArrow);
 
     State->IsCapturing = 0;

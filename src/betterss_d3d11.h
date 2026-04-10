@@ -83,6 +83,7 @@ struct betterss_renderer
     ID3D11BlendState *AlphaBlend;
 };
 
+static void ReleaseCachedTexture(betterss_renderer::cached_texture *Cache);
 static int RendererIsValid(betterss_renderer *Renderer);
 static betterss_renderer AcquireRenderer(HWND Window);
 static void ReleaseRenderer(betterss_renderer *Renderer);

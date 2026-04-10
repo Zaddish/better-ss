@@ -93,6 +93,14 @@ static IDXGISwapChain1 *AcquireSwapChain(ID3D11Device *Device, HWND Window) {
     return(Result);
 }
 
+static void ReleaseCachedTexture(betterss_renderer::cached_texture *Cache) {
+    if(Cache->RTV) { Cache->RTV->Release(); Cache->RTV = 0; }
+    if(Cache->SRV) { Cache->SRV->Release(); Cache->SRV = 0; }
+    if(Cache->Texture) { Cache->Texture->Release(); Cache->Texture = 0; }
+    Cache->Width = 0;
+    Cache->Height = 0;
+}
+
 static void ReleaseRenderTarget(betterss_renderer *Renderer) {
     if(Renderer->RenderTarget) {
         Renderer->RenderTarget->Release();
@@ -156,21 +164,15 @@ static void ReleaseRenderer(betterss_renderer *Renderer) {
     if(Renderer->LineVertexBuffer) Renderer->LineVertexBuffer->Release();
     if(Renderer->LineInputLayout) Renderer->LineInputLayout->Release();
     
-    if(Renderer->CachedRender.RTV) Renderer->CachedRender.RTV->Release();
-    if(Renderer->CachedRender.Texture) Renderer->CachedRender.Texture->Release();
-    if(Renderer->CachedStaging.Texture) Renderer->CachedStaging.Texture->Release();
+    ReleaseCachedTexture(&Renderer->CachedRender);
+    ReleaseCachedTexture(&Renderer->CachedStaging);
+    ReleaseCachedTexture(&Renderer->HighlightTexture);
+    ReleaseCachedTexture(&Renderer->SceneCopy);
+    ReleaseCachedTexture(&Renderer->CachedBackground);
 
     if(Renderer->NoCullState) Renderer->NoCullState->Release();
     if(Renderer->CompositeShader) Renderer->CompositeShader->Release();
     if(Renderer->CompositeConstantBuffer) Renderer->CompositeConstantBuffer->Release();
-    if(Renderer->HighlightTexture.SRV) Renderer->HighlightTexture.SRV->Release();
-    if(Renderer->HighlightTexture.RTV) Renderer->HighlightTexture.RTV->Release();
-    if(Renderer->HighlightTexture.Texture) Renderer->HighlightTexture.Texture->Release();
-    if(Renderer->SceneCopy.SRV) Renderer->SceneCopy.SRV->Release();
-    if(Renderer->SceneCopy.Texture) Renderer->SceneCopy.Texture->Release();
-    if(Renderer->CachedBackground.SRV) Renderer->CachedBackground.SRV->Release();
-    if(Renderer->CachedBackground.RTV) Renderer->CachedBackground.RTV->Release();
-    if(Renderer->CachedBackground.Texture) Renderer->CachedBackground.Texture->Release();
 
     for EachCount(i, MODE_LABEL_COUNT) ReleaseModeLabel(&Renderer->ModeLabels[i]);
     if(Renderer->AlphaBlend) Renderer->AlphaBlend->Release();
@@ -286,9 +288,7 @@ static ID3D11Texture2D *GetCachedTexture(betterss_renderer *R, betterss_renderer
         return Cache->Texture;
     }
 
-    if(Cache->RTV) { Cache->RTV->Release(); Cache->RTV = 0; }
-    if(Cache->SRV) { Cache->SRV->Release(); Cache->SRV = 0; }
-    if(Cache->Texture) { Cache->Texture->Release(); Cache->Texture = 0; }
+    ReleaseCachedTexture(Cache);
 
     D3D11_TEXTURE2D_DESC Desc = {};
     Desc.Width = Width;
