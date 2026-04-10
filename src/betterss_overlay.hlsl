@@ -54,7 +54,7 @@ float4 PSMain(VS_OUTPUT Input) : SV_TARGET
         }
     }
 
-    if(!InsideSelection || !HasSelection)
+    if(!InsideSelection)
     {
         Color.rgb *= DimFactor;
     }

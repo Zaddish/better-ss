@@ -117,22 +117,18 @@ static void SaveSettings(betterss_state *State) {
 }
 
 static void LoadSettings(betterss_state *State) {
+    State->CaptureHotkey.Mods = MOD_CONTROL | MOD_SHIFT;
+    State->CaptureHotkey.VK = 'S';
+    State->SaveHotkey.Mods = MOD_CONTROL | MOD_SHIFT | MOD_ALT;
+    State->SaveHotkey.VK = 'S';
+
     HKEY Key;
-    int Loaded = 0;
     if(RegOpenKeyExW(HKEY_CURRENT_USER, RegistryKeyPath, 0, KEY_READ, &Key) == ERROR_SUCCESS) {
         DWORD Size = sizeof(hotkey_binding);
-        int a = (RegQueryValueExW(Key, L"CaptureHotkey", 0, 0, (BYTE *)&State->CaptureHotkey, &Size) == ERROR_SUCCESS);
+        RegQueryValueExW(Key, L"CaptureHotkey", 0, 0, (BYTE *)&State->CaptureHotkey, &Size);
         Size = sizeof(hotkey_binding);
-        int b = (RegQueryValueExW(Key, L"SaveHotkey", 0, 0, (BYTE *)&State->SaveHotkey, &Size) == ERROR_SUCCESS);
-        Loaded = a && b;
+        RegQueryValueExW(Key, L"SaveHotkey", 0, 0, (BYTE *)&State->SaveHotkey, &Size);
         RegCloseKey(Key);
-    }
-
-    if(!Loaded) {
-        State->CaptureHotkey.Mods = MOD_CONTROL | MOD_SHIFT;
-        State->CaptureHotkey.VK = 'S';
-        State->SaveHotkey.Mods = MOD_CONTROL | MOD_SHIFT | MOD_ALT;
-        State->SaveHotkey.VK = 'S';
     }
 }
 
@@ -945,6 +941,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                 }
                 else if(State->Selection->IsAnnotating) {
                     AnnotationEnd(State->Selection);
+                    RefreshOverlay(State);
                     SetCursor(State->CursorCross);
                 }
             }
@@ -1018,6 +1015,14 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
             if(State->SnapEnabled) {
                 UpdateSnapPreview(State, State->LastMouseX, State->LastMouseY);
             }
+        } break;
+
+        case WM_DISPLAYCHANGE: {
+            int VX = GetSystemMetrics(SM_XVIRTUALSCREEN);
+            int VY = GetSystemMetrics(SM_YVIRTUALSCREEN);
+            int VW = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            int VH = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+            SetWindowPos(Window, 0, VX, VY, VW, VH, SWP_NOZORDER | SWP_NOACTIVATE);
         } break;
 
         case WM_DESTROY: {

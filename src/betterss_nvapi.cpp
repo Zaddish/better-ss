@@ -193,7 +193,7 @@ static int NvCaptureAllMonitors(nv_capture *Nv, ID3D11Device *Device) {
 
 static void CacheNvBackground(betterss_renderer *R, nv_capture *Nv) {
     GetCachedTexture(R, &R->CachedBackground, R->Width, R->Height,
-        D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0);
+        D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0);
     if(!R->CachedBackground.Texture) return;
 
     int OriginX = Nv->VirtualScreen.left;
