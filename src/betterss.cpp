@@ -82,6 +82,9 @@ static void UpdateTrayTip(betterss_state *State);
 #define IDM_CHANGEHOTKEY 1003
 #define IDM_CHANGESAVEHOTKEY 1004
 
+#define HOTKEY_SLOT_CAPTURE 0
+#define HOTKEY_SLOT_SAVE    1
+
 static const wchar_t *RegistryKeyPath = L"Software\\BetterSS";
 static const wchar_t *StartupKeyPath = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
@@ -208,31 +211,21 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int Code, WPARAM WParam, LPARAM LPa
         return(CallNextHookEx(State->KeyboardHook, Code, WParam, LParam));
     }
 
-    if(State->IsCapturingHotkey && State->HotkeyDialog) {
-        hotkey_binding *Target = State->ConfiguringSaveHotkey ? &State->SaveHotkey : &State->CaptureHotkey;
-        Target->Mods = State->LiveMods;
-        Target->VK = VK;
-
-        SaveSettings(State);
-        RegisterCurrentHotkey(State);
-        UpdateTrayTip(State);
-        Shell_NotifyIconW(NIM_MODIFY, &State->TrayIcon);
-
-        DestroyWindow(State->HotkeyDialog);
-        State->HotkeyDialog = 0;
-        State->IsCapturingHotkey = 0;
-        State->ConfiguringSaveHotkey = 0;
-        return(1);
+    if(State->HotkeyDialog) {
+        return(CallNextHookEx(State->KeyboardHook, Code, WParam, LParam));
     }
 
     if(State->IsCapturing) {
-        if(VK == VK_ESCAPE || (VK >= '1' && VK <= '3')) {
+        if(VK == VK_ESCAPE) {
+            PostMessageW(State->Window, WM_KEYDOWN, VK_ESCAPE, 0);
+            return(1);
+        }
+        if(State->LiveMods == 0 && VK >= '1' && VK <= '3') {
             PostMessageW(State->Window, WM_KEYDOWN, VK, 0);
             return(1);
         }
     }
-
-    if(!State->IsCapturing && !State->IsCapturingHotkey) {
+    else {
         if(HotkeyMatches(&State->CaptureHotkey, VK, State->LiveMods)) {
             State->CaptureMode = 0;
             PostMessageW(State->Window, WM_HOTKEY, 0, 0);
@@ -323,19 +316,64 @@ static void ShowTrayMenu(betterss_state *State) {
     DestroyMenu(Menu);
 }
 
-// hotkey capture dialog
 static LRESULT CALLBACK HotkeyDialogProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam) {
+    betterss_state *State = (betterss_state *)GetWindowLongPtrW(Window, GWLP_USERDATA);
+
+    if(Message == WM_NCCREATE) {
+        CREATESTRUCTW *CreateStruct = (CREATESTRUCTW *)LParam;
+        SetWindowLongPtrW(Window, GWLP_USERDATA, (LONG_PTR)CreateStruct->lpCreateParams);
+        return(DefWindowProcW(Window, Message, WParam, LParam));
+    }
+
     switch(Message) {
-        case WM_KILLFOCUS:
-        case WM_CLOSE: {
-            if(g_HookState) {
-                g_HookState->IsCapturingHotkey = 0;
-                g_HookState->ConfiguringSaveHotkey = 0;
-                g_HookState->HotkeyDialog = 0;
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN: {
+            UINT VK = (UINT)WParam;
+            if(ModifierFromVK(VK)) break;
+
+            if(VK == VK_ESCAPE) {
+                DestroyWindow(Window);
+                break;
             }
+
+            if(VK == VK_RETURN) {
+                if(!State->HotkeyDialogHasPending) break;
+                hotkey_binding *Target = (State->HotkeyDialogSlot == HOTKEY_SLOT_SAVE) ? &State->SaveHotkey : &State->CaptureHotkey;
+                hotkey_binding *Other  = (State->HotkeyDialogSlot == HOTKEY_SLOT_SAVE) ? &State->CaptureHotkey : &State->SaveHotkey;
+                if(Other->VK == State->HotkeyDialogPending.VK && Other->Mods == State->HotkeyDialogPending.Mods) {
+                    State->HotkeyDialogConflict = 1;
+                    InvalidateRect(Window, 0, TRUE);
+                    break;
+                }
+                *Target = State->HotkeyDialogPending;
+                SaveSettings(State);
+                UpdateTrayTip(State);
+                Shell_NotifyIconW(NIM_MODIFY, &State->TrayIcon);
+                DestroyWindow(Window);
+                break;
+            }
+
+            State->HotkeyDialogPending.VK = VK;
+            State->HotkeyDialogPending.Mods = State->LiveMods;
+            State->HotkeyDialogHasPending = 1;
+            State->HotkeyDialogConflict = 0;
+            InvalidateRect(Window, 0, TRUE);
+        } break;
+
+        case WM_KILLFOCUS: {
+            PostMessageW(Window, WM_CLOSE, 0, 0);
+        } break;
+
+        case WM_CLOSE: {
             DestroyWindow(Window);
         } break;
-        
+
+        case WM_DESTROY: {
+            State->HotkeyDialog = 0;
+            State->HotkeyDialogHasPending = 0;
+            State->HotkeyDialogConflict = 0;
+        } break;
+
         case WM_PAINT: {
             PAINTSTRUCT Ps;
             HDC Dc = BeginPaint(Window, &Ps);
@@ -343,40 +381,57 @@ static LRESULT CALLBACK HotkeyDialogProc(HWND Window, UINT Message, WPARAM WPara
             GetClientRect(Window, &Rect);
             FillRect(Dc, &Rect, (HBRUSH)(COLOR_WINDOW + 1));
             SetBkMode(Dc, TRANSPARENT);
-            
-            // should probably say which hotkey we are setting but for now generic message is fine
-            DrawTextW(Dc, L"Press any key combination...", -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+            wchar_t Line[128];
+            if(State->HotkeyDialogHasPending) {
+                wchar_t KeyStr[64];
+                GetHotkeyString(&State->HotkeyDialogPending, KeyStr, 64);
+                if(State->HotkeyDialogConflict) {
+                    wcscpy_internal(Line, 128, L"Conflicts: ");
+                    wcscat_internal(Line, 128, KeyStr);
+                }
+                else {
+                    wcscpy_internal(Line, 128, KeyStr);
+                    wcscat_internal(Line, 128, L"    (Enter to confirm, Esc to cancel)");
+                }
+            }
+            else {
+                wcscpy_internal(Line, 128, L"Press a key combination, then Enter. Esc cancels.");
+            }
+            DrawTextW(Dc, Line, -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             EndPaint(Window, &Ps);
         } break;
-        
+
         default:
             return(DefWindowProcW(Window, Message, WParam, LParam));
     }
     return(0);
 }
 
-static void ShowHotkeyDialog(betterss_state *State, HINSTANCE Instance, int ConfiguringSave) {
+static void ShowHotkeyDialog(betterss_state *State, HINSTANCE Instance, int Slot) {
     if(State->HotkeyDialog) return;
 
-    int Width = 350;
+    int Width = 420;
     int Height = 120;
     int X = (GetSystemMetrics(SM_CXSCREEN) - Width) / 2;
     int Y = (GetSystemMetrics(SM_CYSCREEN) - Height) / 2;
-    
-    const wchar_t *Title = ConfiguringSave ? L"Set Save Hotkey" : L"Set Capture Hotkey";
-    
-    State->HotkeyDialog = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, 
+
+    const wchar_t *Title = (Slot == HOTKEY_SLOT_SAVE) ? L"Set Save Hotkey" : L"Set Capture Hotkey";
+
+    State->HotkeyDialogSlot = Slot;
+    State->HotkeyDialogHasPending = 0;
+    State->HotkeyDialogConflict = 0;
+
+    HWND Window = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         L"BetterSSHotkeyDialog", Title,
         WS_POPUP | WS_BORDER | WS_CAPTION,
-        X, Y, Width, Height, 0, 0, Instance, 0);
-    
-    if(State->HotkeyDialog) {
-        State->IsCapturingHotkey = 1;
-        State->ConfiguringSaveHotkey = ConfiguringSave;
-        ShowWindow(State->HotkeyDialog, SW_SHOW);
-        SetForegroundWindow(State->HotkeyDialog);
-        SetFocus(State->HotkeyDialog);
-    }
+        X, Y, Width, Height, 0, 0, Instance, State);
+    if(!Window) return;
+
+    State->HotkeyDialog = Window;
+    ShowWindow(Window, SW_SHOW);
+    SetForegroundWindow(Window);
+    SetFocus(Window);
 }
 
 static HWND CreateOverlayWindow(betterss_state *State, HINSTANCE Instance, WNDPROC WndProc) {
@@ -794,7 +849,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 
     switch(Message) {
         case WM_HOTKEY: {
-            if(!State->IsCapturing && !State->IsCapturingHotkey) {
+            if(!State->IsCapturing && !State->HotkeyDialog) {
                 ShowOverlay(State);
             }
         } break;
@@ -821,11 +876,11 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                 } break;
                 
                 case IDM_CHANGEHOTKEY: {
-                    ShowHotkeyDialog(State, GetModuleHandleW(0), 0);
+                    ShowHotkeyDialog(State, GetModuleHandleW(0), HOTKEY_SLOT_CAPTURE);
                 } break;
                 
                 case IDM_CHANGESAVEHOTKEY: {
-                    ShowHotkeyDialog(State, GetModuleHandleW(0), 1);
+                    ShowHotkeyDialog(State, GetModuleHandleW(0), HOTKEY_SLOT_SAVE);
                 } break;
             }
         } break;
@@ -984,7 +1039,7 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
                     AnnotationUndo(State->Selection);
                     RefreshOverlay(State);
                 }
-                else if(!MidStroke && WParam >= '1' && WParam <= '3') {
+                else if(!MidStroke && State->LiveMods == 0 && WParam >= '1' && WParam <= '3') {
                     State->Selection->AnnotationMode = (int)(WParam - '1');
                     RefreshOverlay(State);
                 }

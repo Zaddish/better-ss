@@ -100,8 +100,10 @@ struct betterss_state
     NOTIFYICONDATAW TrayIcon;
     HHOOK KeyboardHook;
     HWND HotkeyDialog;
-    int IsCapturingHotkey;
-    int ConfiguringSaveHotkey; // 0 = standard capture hotkey, 1 = save file hotkey
+    int HotkeyDialogSlot;
+    hotkey_binding HotkeyDialogPending;
+    int HotkeyDialogHasPending;
+    int HotkeyDialogConflict;
     int CaptureMode; // 0 = clipboard, 1 = save file
 
     HCURSOR CursorArrow;
