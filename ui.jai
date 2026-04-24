@@ -413,10 +413,14 @@ ui_hsv_wheel :: (area: UI_Rect, ps: *Panel_State, id_base: s64) {
 
 // panel
 
-PANEL_WIDTH  :: 260.0;
-ROW_HEIGHT   :: 28.0;
-PADDING      :: 8.0;
-SWATCH_SIZE  :: 22.0;
+PANEL_WIDTH_BASE  :: 260.0;
+ROW_HEIGHT_BASE   :: 28.0;
+PADDING_BASE      :: 8.0;
+SWATCH_SIZE_BASE  :: 22.0;
+INDICATOR_BASE    :: 20.0;
+INDICATOR_MARGIN  :: 6.0;
+PANEL_ANCHOR_LIFT :: 20.0;
+SWATCH_GAP_BASE   :: 4.0;
 
 PRESET_COLORS :: Vector3.[
     .{1.0, 0.2, 0.2},
@@ -432,8 +436,10 @@ ui_draw_panel :: (r: *Betterss_Renderer, screen_w: s32, screen_h: s32) -> consum
     consumed := false;
     ui_panel_font_height = font_height_for_point(ps.anchor_x, ps.anchor_y, 10);
 
-    indicator_size :: 20.0;
-    indicator := UI_Rect.{cast(float) screen_w - indicator_size - 6, cast(float) screen_h - indicator_size - 6, indicator_size, indicator_size};
+    indicator_scale := cast(float) dpi_for_point(screen_w - 32, screen_h - 32) / 96.0;
+    indicator_size := INDICATOR_BASE    * indicator_scale;
+    indicator_marg := INDICATOR_MARGIN  * indicator_scale;
+    indicator := UI_Rect.{cast(float) screen_w - indicator_size - indicator_marg, cast(float) screen_h - indicator_size - indicator_marg, indicator_size, indicator_size};
     ui_emit_quad(indicator, .{ps.color.x, ps.color.y, ps.color.z, 0.8});
 
     if !ps.is_open {
@@ -451,6 +457,14 @@ ui_draw_panel :: (r: *Betterss_Renderer, screen_w: s32, screen_h: s32) -> consum
     is_highlight := mode == 1;
     is_censor    := mode == 2;
 
+    panel_scale := cast(float) dpi_for_point(ps.anchor_x, ps.anchor_y) / 96.0;
+    PANEL_WIDTH := PANEL_WIDTH_BASE * panel_scale;
+    ROW_HEIGHT  := ROW_HEIGHT_BASE  * panel_scale;
+    PADDING     := PADDING_BASE     * panel_scale;
+    SWATCH_SIZE := SWATCH_SIZE_BASE * panel_scale;
+    SWATCH_GAP  := SWATCH_GAP_BASE  * panel_scale;
+    ANCHOR_LIFT := PANEL_ANCHOR_LIFT * panel_scale;
+
     //  compute panel height dynamically based on which widgets are visible
     panel_h := PADDING * 2.0;                      // top + bottom padding
     panel_h += ROW_HEIGHT;                         // mode buttons
@@ -465,7 +479,7 @@ ui_draw_panel :: (r: *Betterss_Renderer, screen_w: s32, screen_h: s32) -> consum
     panel_h += PADDING + ROW_HEIGHT;               // global toggle
 
     px := clamp(cast(float) ps.anchor_x - PANEL_WIDTH * 0.5, 0.0, cast(float) screen_w - PANEL_WIDTH);
-    py := clamp(cast(float) ps.anchor_y - 20.0, 0.0, cast(float) screen_h - panel_h);
+    py := clamp(cast(float) ps.anchor_y - ANCHOR_LIFT, 0.0, cast(float) screen_h - panel_h);
     panel := UI_Rect.{px, py, PANEL_WIDTH, panel_h};
     panel_last_rect = panel;
 
@@ -518,7 +532,7 @@ ui_draw_panel :: (r: *Betterss_Renderer, screen_w: s32, screen_h: s32) -> consum
     swatch_row: UI_Rect;
     swatch_row, inner = cut_top(inner, SWATCH_SIZE);
     for i: 0 .. PRESET_COLORS.count - 1 {
-        sr := UI_Rect.{swatch_row.x + cast(float) i * (SWATCH_SIZE + 4), swatch_row.y, SWATCH_SIZE, SWATCH_SIZE};
+        sr := UI_Rect.{swatch_row.x + cast(float) i * (SWATCH_SIZE + SWATCH_GAP), swatch_row.y, SWATCH_SIZE, SWATCH_SIZE};
         if ui_color_swatch(sr, PRESET_COLORS[i], 400 + cast(s64) i) {
             ps.active.color = PRESET_COLORS[i];
             ps.active.hsv_hue, ps.active.hsv_sat, ps.active.hsv_val = rgb_to_hsv(PRESET_COLORS[i].x, PRESET_COLORS[i].y, PRESET_COLORS[i].z);
