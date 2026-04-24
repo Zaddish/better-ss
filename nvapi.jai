@@ -121,27 +121,38 @@ init_nv_capture :: (nv: *Nv_Capture, device: *ID3D11Device) -> bool {
     if !dll return false;
 
     nv_query_interface := cast(Nv_Query_Interface_Fn) GetProcAddress(dll, "nvapi_QueryInterface");
-    if !nv_query_interface { FreeLibrary(dll); return false; }
+    if !nv_query_interface {
+        user_message_warning("nvapi: nvapi_QueryInterface missing");
+        FreeLibrary(dll); return false;
+    }
 
     nv_init := cast(Nv_Initialize_Fn) nv_query_interface(0x0150E828);
-    if !nv_init || nv_init() != 0 { FreeLibrary(dll); return false; }
+    if !nv_init || nv_init() != 0 {
+        user_message_warning("nvapi: NvAPI_Initialize failed");
+        FreeLibrary(dll); return false;
+    }
 
     nv_enum_gpus := cast(Nv_Enum_Physical_Gpus_Fn) nv_query_interface(0xE5AC921F);
     gpu_handles: [64] *void;
     gpu_count: u32;
     if !nv_enum_gpus || nv_enum_gpus(*gpu_handles, *gpu_count) != 0 || gpu_count == 0 {
+        user_message_warning("nvapi: no NVIDIA GPU enumerated");
         FreeLibrary(dll);
         return false;
     }
 
     read_fn := cast(Nv_Read_Scanout_Fn) nv_query_interface(0xBCB1C536);
-    if !read_fn { FreeLibrary(dll); return false; }
+    if !read_fn {
+        user_message_warning("nvapi: ReadFromBoundFramebuffer unavailable");
+        FreeLibrary(dll); return false;
+    }
 
     nv.dll          = dll;
     nv.read_scanout = read_fn;
     nv.gpu_handle   = gpu_handles[0];
 
     if !refresh_nv_monitors(nv) {
+        user_message_warning("nvapi: display topology query failed");
         FreeLibrary(dll);
         <<nv = Nv_Capture.{};
         return false;
@@ -160,6 +171,7 @@ init_nv_capture :: (nv: *Nv_Capture, device: *ID3D11Device) -> bool {
     if test_data VirtualFree(test_data, 0, MEM_RELEASE);
 
     if status != 0 {
+        user_message_warning("nvapi: scanout test failed (status %)", status);
         FreeLibrary(dll);
         <<nv = Nv_Capture.{};
         return false;

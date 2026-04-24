@@ -1,8 +1,10 @@
 MAX_ANNOTATIONS     :: 128;
 MAX_POINTS_PER_LINE :: 16384;
 
-Annotation_Type :: enum u32 { LINE; RECT; HIGHLIGHT; }
-Annotation_Mode :: enum u32 { LINE; HIGHLIGHT; CENSOR;  }
+Annotation_Type :: enum u32 #specified { LINE :: 0; RECT :: 1; HIGHLIGHT :: 2; }
+Annotation_Mode :: enum u32 #specified { LINE :: 0; HIGHLIGHT :: 1; CENSOR :: 2; }
+
+ANNOTATION_MODE_COUNT :: #run enum_values_as_s64(Annotation_Mode).count;
 
 Line_Point :: struct { x, y: s32; }
 

@@ -1,4 +1,4 @@
-Output_Pixels_Source_Kind :: enum u32 {
+Output_Pixels_Source_Kind :: enum u32 #specified {
     NONE        :: 0;
     D3D_STAGING :: 1;
 }
@@ -235,8 +235,10 @@ acquire_selection_pixels :: (r: *Betterss_Renderer, selection_rect: RECT, s: *Se
 }
 
 release_output_pixels :: (p: *Output_Pixels) {
-    if p.source_kind == .D3D_STAGING && p.data {
-        ID3D11DeviceContext_Unmap(p.renderer.ctx, xx p.staging, 0);
+    if #complete p.source_kind == {
+        case .NONE;
+        case .D3D_STAGING;
+            if p.data ID3D11DeviceContext_Unmap(p.renderer.ctx, xx p.staging, 0);
     }
     <<p = Output_Pixels.{};
 }

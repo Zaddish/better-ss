@@ -20,10 +20,17 @@ TPM_RIGHTBUTTON  :: 0x0002;
 NIF_MESSAGE :: 0x00000001;
 NIF_ICON    :: 0x00000002;
 NIF_TIP     :: 0x00000004;
+NIF_INFO    :: 0x00000010;
 
 NIM_ADD    :: 0x00000000;
 NIM_MODIFY :: 0x00000001;
 NIM_DELETE :: 0x00000002;
+
+NIIF_NONE    :: 0x00000000;
+NIIF_INFO    :: 0x00000001;
+NIIF_WARNING :: 0x00000002;
+NIIF_ERROR   :: 0x00000003;
+NIIF_NOSOUND :: 0x00000010;
 
 MOD_ALT     :: 0x0001;
 MOD_CONTROL :: 0x0002;
@@ -291,6 +298,50 @@ GET_Y_LPARAM :: inline (l: LPARAM) -> s32 { return cast,no_check(s32) cast,no_ch
 // standard cursor/icon IDs
 
 IDI_APPLICATION :: 32512;
+
+Get_Dpi_For_Monitor_Fn :: #type (hmonitor: HMONITOR, dpi_type: u32, dpi_x: *u32, dpi_y: *u32) -> HRESULT #c_call;
+
+dpi_resolver_tried:   bool;
+dpi_resolver_shcore:  HMODULE;
+dpi_resolver_fn:      Get_Dpi_For_Monitor_Fn;
+
+dpi_for_point :: (x: s32, y: s32) -> s32 {
+    if !dpi_resolver_tried {
+        dpi_resolver_tried = true;
+        dpi_resolver_shcore = LoadLibraryA("shcore.dll");
+        if dpi_resolver_shcore {
+            dpi_resolver_fn = cast(Get_Dpi_For_Monitor_Fn) GetProcAddress(dpi_resolver_shcore, "GetDpiForMonitor");
+        }
+    }
+
+    if dpi_resolver_fn {
+        pt: POINT;
+        pt.x = x;
+        pt.y = y;
+        mon := MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        if mon {
+            dx: u32;
+            dy: u32;
+            if dpi_resolver_fn(mon, xx MDT_EFFECTIVE_DPI, *dx, *dy) == 0 && dy > 0 {
+                return cast(s32) dy;
+            }
+        }
+    }
+
+    // desktop DC, ignores per monitor scaling if we cant get it
+    // for whatever reason 
+    dc := GetDC(null);
+    result: s32 = 96;
+    if dc {
+        result = GetDeviceCaps(dc, LOGPIXELSY);
+        ReleaseDC(null, dc);
+    }
+    return result;
+}
+
+font_height_for_point :: inline (x: s32, y: s32, point_size: s32) -> s32 {
+    return MulDiv(point_size, dpi_for_point(x, y), 72);
+}
 
 // use this as a background brush
 COLOR_WINDOW_BRUSH :: cast(HBRUSH) cast,no_check(u64) (5 + 1);

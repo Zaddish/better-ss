@@ -11,7 +11,7 @@ Tool_Settings :: struct {
     hsv_val:   float   = 0.9;
 }
 
-MODE_COUNT :: 3;
+MODE_COUNT :: ANNOTATION_MODE_COUNT;
 
 DEFAULT_PER_MODE :: Tool_Settings.[
     .{color = .{1.0, 0.2, 0.2},  width = 5.0, stabilize = 0.10, hsv_hue = 5.0,   hsv_sat = 0.80, hsv_val = 1.0},
@@ -73,9 +73,7 @@ ui_vertex_count: s32;
 // which widget owns the drag
 ui_active_id: s64;
 
-// cached DPI for text rendering
-ui_cached_dpi:         s32;
-ui_cached_font_height: s32;
+ui_panel_font_height: s32;
 
 ui_start_text_edit :: (id: s64, ptr: *float, mn: float, mx: float) {
     ps := *panel_state;
@@ -432,6 +430,7 @@ PRESET_COLORS :: Vector3.[
 ui_draw_panel :: (r: *Betterss_Renderer, screen_w: s32, screen_h: s32) -> consumed_click: bool {
     ps := *panel_state;
     consumed := false;
+    ui_panel_font_height = font_height_for_point(ps.anchor_x, ps.anchor_y, 10);
 
     indicator_size :: 20.0;
     indicator := UI_Rect.{cast(float) screen_w - indicator_size - 6, cast(float) screen_h - indicator_size - 6, indicator_size, indicator_size};
@@ -541,7 +540,6 @@ ui_draw_panel :: (r: *Betterss_Renderer, screen_w: s32, screen_h: s32) -> consum
 
     // text labels
     ui_deferred_label_count = 0;
-    ensure_dpi_cached();
 
     for i: 0 .. 2 {
         ui_defer_label(r, mode_row.x + cast(float) i * (btn_w + PADDING), mode_row.y, btn_w, mode_row.h, MODE_NAMES[i]);
@@ -578,29 +576,23 @@ ui_draw_panel :: (r: *Betterss_Renderer, screen_w: s32, screen_h: s32) -> consum
 }
 
 // deferred text labels
+// i keep a pointer to the cache owned Mode_Label so
+// the texture survives across frames
 
 UI_Deferred_Label :: struct {
     x, y, w, h: s32;
-    label: Mode_Label;
+    label: *Mode_Label;
 }
 
 MAX_DEFERRED_LABELS :: 16;
 ui_deferred_labels: [MAX_DEFERRED_LABELS] UI_Deferred_Label;
 ui_deferred_label_count: s32;
 
-ensure_dpi_cached :: () {
-    if ui_cached_dpi != 0 return;
-    dc := GetDC(null);
-    ui_cached_dpi = GetDeviceCaps(dc, LOGPIXELSY);
-    ReleaseDC(null, dc);
-    ui_cached_font_height = MulDiv(10, ui_cached_dpi, 72);
-}
-
 ui_defer_label :: (r: *Betterss_Renderer, px: float, py: float, pw: float, ph: float, text: string) {
     if ui_deferred_label_count >= MAX_DEFERRED_LABELS return;
     if !r.device return;
 
-    label := bake_mode_label(r.device, temp_wide(text), ui_cached_font_height);
+    label := label_cache_get(*r.label_cache, r.device, text, ui_panel_font_height);
     if !label.srv return;
 
     idx := ui_deferred_label_count;
@@ -618,7 +610,7 @@ ui_render_deferred_labels :: (r: *Betterss_Renderer) {
 
     for i: 0 .. ui_deferred_label_count - 1 {
         dl := *ui_deferred_labels[i];
-        if !dl.label.srv continue;
+        if !dl.label || !dl.label.srv continue;
 
         viewport: D3D11_VIEWPORT;
         viewport.TopLeftX = cast(float) dl.x;
@@ -648,8 +640,6 @@ ui_render_deferred_labels :: (r: *Betterss_Renderer) {
 
         null_srv: *ID3D11ShaderResourceView;
         ID3D11DeviceContext_PSSetShaderResources(r.ctx, 0, 1, *null_srv);
-
-        release_mode_label(*dl.label);
     }
     ui_deferred_label_count = 0;
 }

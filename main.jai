@@ -2,6 +2,8 @@
 #load "selection.jai";
 #load "capture.jai";
 #load "d3d11.jai";
+#load "label_cache.jai";
+#load "user_messages.jai";
 #load "nvapi.jai";
 #load "output.jai";
 #load "ui.jai";
@@ -101,11 +103,17 @@ W_CLASS_OVERLAY       :: #run bake_wide("BetterSSOverlay");
 W_MENU_STARTUP        :: #run bake_wide("Start with Windows");
 W_MENU_QUIT           :: #run bake_wide("Quit");
 W_EXT_PNG             :: #run bake_wide("png");
-W_REG_GLOBAL_FLAG    :: #run bake_wide("IsGlobal");
-W_REG_GLOBAL_TOOL    :: #run bake_wide("GlobalTool");
-W_REG_LINE_TOOL      :: #run bake_wide("LineTool");
-W_REG_HIGHLIGHT_TOOL :: #run bake_wide("HighlightTool");
-W_REG_CENSOR_TOOL    :: #run bake_wide("CensorTool");
+W_REG_GLOBAL_FLAG     :: #run bake_wide("IsGlobal");
+W_REG_GLOBAL_TOOL     :: #run bake_wide("GlobalTool");
+W_REG_LINE_TOOL       :: #run bake_wide("LineTool");
+W_REG_HIGHLIGHT_TOOL  :: #run bake_wide("HighlightTool");
+W_REG_CENSOR_TOOL     :: #run bake_wide("CensorTool");
+
+// for now load_settings refuses to read the tool blobs when the stored version disagrees and
+// resets to DEFAULT_PER_MODE instead of returning garbage  
+// TODO(zaddish): need to make this better for the userd
+CONFIG_VERSION         :: 1;
+W_REG_CONFIG_VERSION   :: #run bake_wide("ConfigVersion");
 
 Hotkey_Binding :: struct {
     mods: u32;
@@ -117,7 +125,7 @@ Window_Entry :: struct {
     snap_bounds:  RECT;
 }
 
-Capture_Mode :: enum u32 {
+Capture_Mode :: enum u32 #specified {
     CLIPBOARD :: 0;
     FILE      :: 1;
 }
@@ -260,6 +268,8 @@ main :: () {
     if !renderer_is_valid(*renderer) fatal_startup("D3D11 device creation failed. No hardware or WARP device available.");
     initialize_shaders(*renderer);
 
+    create_tray_icon(instance);
+
     // if NVAPI is not available show_overlay just falls back to DXGI
     init_nv_capture(*nvapi, renderer.device);
 
@@ -268,7 +278,6 @@ main :: () {
 
     ShowWindow(overlay_window, SW_HIDE);
 
-    create_tray_icon(instance);
     register_keyboard_hook();
 
     msg: MSG;
@@ -309,6 +318,9 @@ prevent_windows_dpi_scaling :: () {
 save_settings :: () {
     key: HKEY;
     if RegCreateKeyExW(HKEY_CURRENT_USER, REGISTRY_KEY_PATH_W.data, 0, null, 0, KEY_WRITE, null, *key, null) == ERROR_SUCCESS {
+        version: u32 = CONFIG_VERSION;
+        RegSetValueExW(key, W_REG_CONFIG_VERSION.data, 0, REG_DWORD, xx *version, size_of(u32));
+
         for * hotkey_storage {
             RegSetValueExW(key, HOTKEY_SPECS[it_index].reg_name_w.data, 0, REG_BINARY, xx it, size_of(Hotkey_Binding));
         }
@@ -330,29 +342,71 @@ load_settings :: () {
     }
 
     key: HKEY;
-    if RegOpenKeyExW(HKEY_CURRENT_USER, REGISTRY_KEY_PATH_W.data, 0, KEY_READ, *key) == ERROR_SUCCESS {
-        for * hotkey_storage {
-            size: u32 = size_of(Hotkey_Binding);
-            RegQueryValueExW(key, HOTKEY_SPECS[it_index].reg_name_w.data, null, null, xx it, *size);
-        }
-        global_flag: u32;
-        flag_size: u32 = size_of(u32);
-        if RegQueryValueExW(key, W_REG_GLOBAL_FLAG.data, null, null, xx *global_flag, *flag_size) == ERROR_SUCCESS {
-            panel_state.is_global = cast(bool) global_flag;
-        }
-        tool_size: u32 = size_of(Tool_Settings);
-        RegQueryValueExW(key, W_REG_GLOBAL_TOOL.data, null, null, xx *panel_state.global_settings, *tool_size);
-        tool_size = size_of(Tool_Settings);
-        RegQueryValueExW(key, W_REG_LINE_TOOL.data,      null, null, xx *panel_state.per_mode[0], *tool_size);
-        tool_size = size_of(Tool_Settings);
-        RegQueryValueExW(key, W_REG_HIGHLIGHT_TOOL.data, null, null, xx *panel_state.per_mode[1], *tool_size);
-        tool_size = size_of(Tool_Settings);
-        RegQueryValueExW(key, W_REG_CENSOR_TOOL.data,    null, null, xx *panel_state.per_mode[2], *tool_size);
+    opened := RegOpenKeyExW(HKEY_CURRENT_USER, REGISTRY_KEY_PATH_W.data, 0, KEY_READ, *key) == ERROR_SUCCESS;
+    if !opened {
+        panel_sync_active();
+        return;
+    }
+    defer RegCloseKey(key);
 
-        RegCloseKey(key);
+    version:      u32;
+    version_size: u32 = size_of(u32);
+    version_ok := RegQueryValueExW(key, W_REG_CONFIG_VERSION.data, null, null, xx *version, *version_size) == ERROR_SUCCESS
+                  && version_size == size_of(u32)
+                  && version     == CONFIG_VERSION;
+
+    for * hotkey_storage {
+        size: u32 = size_of(Hotkey_Binding);
+        if RegQueryValueExW(key, HOTKEY_SPECS[it_index].reg_name_w.data, null, null, xx it, *size) != ERROR_SUCCESS
+           || size != size_of(Hotkey_Binding) {
+            it.mods = HOTKEY_SPECS[it_index].default_mods;
+            it.vk   = HOTKEY_SPECS[it_index].default_vk;
+        }
+    }
+
+    if !version_ok {
+        // tool settings / panel state may be in an older layout
+        // Im just leaving comptime DEFAULT_PER_MODE literal in the panel state
+        // and warning the user, then rewrite the registry in the current layout
+        user_message_warning("settings reset after update");
+        panel_sync_active();
+        save_settings();
+        return;
+    }
+
+    global_flag: u32;
+    flag_size: u32 = size_of(u32);
+    if RegQueryValueExW(key, W_REG_GLOBAL_FLAG.data, null, null, xx *global_flag, *flag_size) == ERROR_SUCCESS
+       && flag_size == size_of(u32) {
+        panel_state.is_global = cast(bool) global_flag;
+    }
+
+    // stage into a scratch copy so a partial failure halfway
+    // through cannot leave panel_state in a weird state
+    scratch_global: Tool_Settings;
+    scratch_modes:  [MODE_COUNT] Tool_Settings;
+
+    blobs_ok := true;
+    blobs_ok = blobs_ok && load_tool_blob(key, W_REG_GLOBAL_TOOL.data,    *scratch_global);
+    blobs_ok = blobs_ok && load_tool_blob(key, W_REG_LINE_TOOL.data,      *scratch_modes[0]);
+    blobs_ok = blobs_ok && load_tool_blob(key, W_REG_HIGHLIGHT_TOOL.data, *scratch_modes[1]);
+    blobs_ok = blobs_ok && load_tool_blob(key, W_REG_CENSOR_TOOL.data,    *scratch_modes[2]);
+
+    if blobs_ok {
+        panel_state.global_settings = scratch_global;
+        panel_state.per_mode        = scratch_modes;
+    } else {
+        user_message_warning("settings reset after update");
+        save_settings();
     }
 
     panel_sync_active();
+}
+
+load_tool_blob :: (key: HKEY, name_w: *u16, out: *Tool_Settings) -> bool {
+    size: u32 = size_of(Tool_Settings);
+    status := RegQueryValueExW(key, name_w, null, null, xx out, *size);
+    return status == ERROR_SUCCESS && size == size_of(Tool_Settings);
 }
 
 is_startup_enabled :: () -> bool {
@@ -511,6 +565,7 @@ create_tray_icon :: (instance: HINSTANCE) {
     tray_icon.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     tray_icon.uCallbackMessage = WM_TRAYICON;
     tray_icon.hIcon            = LoadIconW(null, MAKEINTRESOURCEW(IDI_APPLICATION));
+    defer user_message_flush_pending();
     update_tray_tip();
     Shell_NotifyIconW(NIM_ADD, *tray_icon);
 }
@@ -918,9 +973,13 @@ render_overlay :: () -> bool {
     render_annotations(*renderer, *selection, 0, 0, cast(s32) renderer.width, cast(s32) renderer.height);
 
     mode_idx := cast(s32) selection.annotation_mode;
-    if mode_idx >= 0 && mode_idx < MODE_LABEL_COUNT && renderer.mode_labels[mode_idx].srv {
-        render_mode_label(*renderer, *renderer.mode_labels[mode_idx], last_mouse_x, last_mouse_y,
-                          cast(s32) renderer.width, cast(s32) renderer.height);
+    if mode_idx >= 0 && mode_idx < MODE_LABEL_COUNT {
+        font_h := font_height_for_point(last_mouse_x, last_mouse_y, 12);
+        label  := label_cache_get(*renderer.label_cache, renderer.device, MODE_LABELS[mode_idx], font_h);
+        if label.srv {
+            render_mode_label(*renderer, label, last_mouse_x, last_mouse_y,
+                              cast(s32) renderer.width, cast(s32) renderer.height);
+        }
     }
 
     ui_mouse_x = cast(float) last_mouse_x;
@@ -939,7 +998,13 @@ refresh_overlay :: () {
     if !render_overlay() hide_overlay();
 }
 
-prompt_for_save_file :: (file: *u16, count: u32) -> bool {
+Save_File_Prompt_Result :: enum u32 #specified {
+    CHOSEN    :: 0;
+    CANCELLED :: 1;
+    FAILED    :: 2;
+}
+
+prompt_for_save_file :: (file: *u16, count: u32) -> Save_File_Prompt_Result, err_code: u32 {
     ofn: OPENFILENAMEW;
     ofn.lStructSize = size_of(OPENFILENAMEW);
     ofn.hwndOwner   = overlay_window;
@@ -949,20 +1014,40 @@ prompt_for_save_file :: (file: *u16, count: u32) -> bool {
     ofn.nFilterIndex = 1;
     ofn.Flags       = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
     ofn.lpstrDefExt = W_EXT_PNG.data;
-    return GetSaveFileNameW(*ofn) == .TRUE;
+    if GetSaveFileNameW(*ofn) == .TRUE return .CHOSEN, 0;
+    // CommDlgExtendedError returns 0 when the user cancelled and not zero
+    // for real failures 
+    err := CommDlgExtendedError();
+    if err == 0 return .CANCELLED, 0;
+    return .FAILED, err;
 }
 
 finalise_capture :: (region: RECT) {
     file_buf: [MAX_PATH] u16;
     copy_utf8_to_wide_buffer(*file_buf, "screenshot.png");
-    if capture_mode == .FILE && !prompt_for_save_file(file_buf.data, xx file_buf.count) {
-        hide_overlay();
-        return;
+    if capture_mode == .FILE {
+        prompt, err := prompt_for_save_file(file_buf.data, xx file_buf.count);
+        if #complete prompt == {
+            case .CHOSEN;
+            case .CANCELLED; hide_overlay(); return;
+            case .FAILED;
+                user_message_error("save dialog failed (code %)", err);
+                hide_overlay();
+                return;
+        }
     }
 
     pixels := acquire_selection_pixels(*renderer, region, *selection);
-    if capture_mode == .FILE write_pixels_to_file(wic_factory, pixels, file_buf.data);
-    else                     write_pixels_to_clipboard(pixels);
+    if #complete capture_mode == {
+        case .FILE;
+            if !write_pixels_to_file(wic_factory, pixels, file_buf.data) {
+                user_message_error("failed to save screenshot to disk");
+            }
+        case .CLIPBOARD;
+            if !write_pixels_to_clipboard(pixels) {
+                user_message_error("failed to copy screenshot to clipboard");
+            }
+    }
     // NOTE(zaddish): must release pixels BEFORE hide_overlay cuz hide_overlay
     // releases the cached_staging texture, and release_output_pixels needs
     // to Unmap it first
@@ -1118,11 +1203,10 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                     mode     := selection.annotation_mode;
                     ctrl_held := (GetKeyState(VK_CONTROL) & 0x8000) != 0;
 
-                    if mode == .CENSOR {
-                        censor_begin(*selection, x, y);
-                    } else {
-                        type: Annotation_Type = ifx mode == .HIGHLIGHT then .HIGHLIGHT else .LINE;
-                        annotation_begin(*selection, x, y, type);
+                    if #complete mode == {
+                        case .CENSOR;    censor_begin(*selection, x, y);
+                        case .LINE;      annotation_begin(*selection, x, y, .LINE);
+                        case .HIGHLIGHT; annotation_begin(*selection, x, y, .HIGHLIGHT);
                     }
 
                     if ctrl_held && mode != .CENSOR {
@@ -1207,7 +1291,7 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                             panel_state.anchor_y = last_mouse_y;
                         }
                         refresh_overlay();
-                    } else if !mid_stroke && live_mods == 0 && wparam >= #char "1" && wparam <= #char "3" {
+                    } else if !mid_stroke && live_mods == 0 && wparam >= #char "1" && wparam < #char "1" + ANNOTATION_MODE_COUNT {
                         panel_save_active();
                         selection.annotation_mode = cast(Annotation_Mode) (cast(s32) wparam - #char "1");
                         panel_sync_active();
@@ -1225,8 +1309,8 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                         mode := cast(s32) selection.annotation_mode;
                         // NOTE(zaddish): assumes Delta != 0
                         mode -= (cast(s32) delta >> 31) | 1;
-                        if mode < 0 mode = 2;
-                        if mode > 2 mode = 0;
+                        if mode < 0                          mode = ANNOTATION_MODE_COUNT - 1;
+                        if mode >= ANNOTATION_MODE_COUNT     mode = 0;
                         panel_save_active();
                         selection.annotation_mode = cast(Annotation_Mode) mode;
                         panel_sync_active();
@@ -1250,6 +1334,14 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 vw := GetSystemMetrics(SM_CXVIRTUALSCREEN);
                 vh := GetSystemMetrics(SM_CYVIRTUALSCREEN);
                 SetWindowPos(window, null, vx, vy, vw, vh, SWP_NOZORDER | SWP_NOACTIVATE);
+                // any cached glyph texture could now be at the wrong effective DPI
+                // so im gonna bake lazily again
+                label_cache_invalidate(*renderer.label_cache);
+                return 0;
+            }
+
+            case WM_DPICHANGED; {
+                label_cache_invalidate(*renderer.label_cache);
                 return 0;
             }
 

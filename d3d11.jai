@@ -1,4 +1,4 @@
-MODE_LABEL_COUNT :: 3;
+MODE_LABEL_COUNT :: ANNOTATION_MODE_COUNT;
 
 Overlay_Const_Buffer :: struct {
     selection_rect: [4] float;
@@ -80,7 +80,7 @@ Betterss_Renderer :: struct {
     highlight_texture:        Cached_Texture;
     scene_copy:               Cached_Texture;
 
-    mode_labels: [MODE_LABEL_COUNT] Mode_Label;
+    label_cache: Label_Cache;
     alpha_blend: *ID3D11BlendState;
 
     ui_vertex_shader:  *ID3D11VertexShader;
@@ -121,10 +121,10 @@ UI_PS           :: #run compile_shader(tprint("%shaders/ui.hlsl",        #filepa
 W_SEGOE_UI   :: #run bake_wide("Segoe UI");
 CSTR_POSITION :: #run bake_cstr("POSITION");
 CSTR_COLOR    :: #run bake_cstr("COLOR");
-W_MODE_LABELS : [MODE_LABEL_COUNT] [] u16 : .[
-    #run bake_wide("LINE"),
-    #run bake_wide("HIGHLIGHT"),
-    #run bake_wide("CENSOR"),
+MODE_LABELS : [MODE_LABEL_COUNT] string : .[
+    "LINE",
+    "HIGHLIGHT",
+    "CENSOR",
 ];
 
 create_dynamic_buffer :: (device: *ID3D11Device, out: **ID3D11Buffer, byte_width: u32, bind_flags: D3D11_BIND_FLAG) {
@@ -250,7 +250,7 @@ release_renderer :: (r: *Betterss_Renderer) {
     release_cached_texture(*r.scene_copy);
     release_cached_texture(*r.cached_background);
 
-    for * r.mode_labels release_mode_label(it);
+    label_cache_release(*r.label_cache);
 
     com_release_all(r);
 
@@ -542,7 +542,7 @@ render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s
     max_vertices: s32 = 0;
     for * entry: annotations {
         expanded := entry.point_count * 8;
-        if entry.type == {
+        if #complete entry.type == {
             case .LINE;       #through;
             case .HIGHLIGHT;  if entry.point_count > 1 max_vertices += expanded * 6;
             case .RECT;       max_vertices += 6;
@@ -884,14 +884,6 @@ initialize_shaders :: (r: *Betterss_Renderer) {
     initialize_line_renderer(r);
     initialize_ui_renderer(r);
 
-    screen_dc := GetDC(null);
-    dpi       := GetDeviceCaps(screen_dc, LOGPIXELSY);
-    ReleaseDC(null, screen_dc);
-    font_height := MulDiv(12, dpi, 72);
-
-    for label: W_MODE_LABELS {
-        r.mode_labels[it_index] = bake_mode_label(r.device, label.data, font_height);
-    }
 
     blend_desc: D3D11_BLEND_DESC;
     blend_desc.RenderTarget[0].BlendEnable           = xx BOOL.TRUE;
