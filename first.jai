@@ -21,6 +21,8 @@ build :: () {
     w := compiler_create_workspace(ifx is_release then "BetterSS Release" else "BetterSS Debug");
     if !w compiler_report("Workspace creation failed.\n");
 
+    compiler_begin_intercept(w);
+
     options := get_build_options(w);
     options.output_path            = "build/";
     options.output_executable_name = ifx is_release then "betterss" else "betterss_debug";
@@ -49,6 +51,31 @@ DONE, get_git_hash(), ifx is_release then "true" else "false");
     add_build_string(config, w);
 
     add_build_file(tprint("%main.jai", #filepath), w);
+
+    failed := false;
+    while true {
+        msg := compiler_wait_for_message();
+        if msg.kind == .COMPLETE {
+            complete := cast(*Message_Complete) msg;
+            if complete.error_code == .COMPILATION_FAILED then failed = true;
+            break;
+        }
+    }
+    compiler_end_intercept(w);
+
+    if failed return;
+
+    exe_path := tprint("%/%.exe", options.output_path, options.output_executable_name);
+
+    ico := create_ico_file_from_bitmap_filename("icons/BSS_Tray_256.png");
+    if !set_icon_by_data(exe_path, ico) {
+        log_error("Failed to set icon for '%'\n", exe_path);
+    }
+
+    manifest: Manifest_Options;
+    if !add_manifest_to_executable(exe_path, manifest) {
+        log_error("Failed to add manifest to '%'\n", exe_path);
+    }
 }
 
 get_git_hash :: () -> string {
@@ -62,5 +89,7 @@ get_git_hash :: () -> string {
 #import "Basic";
 #import "Compiler";
 #import "File";
+#import "Ico_File";
 #import "Process";
 #import "String";
+#import "Windows_Resources";

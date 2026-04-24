@@ -299,6 +299,13 @@ GET_Y_LPARAM :: inline (l: LPARAM) -> s32 { return cast,no_check(s32) cast,no_ch
 
 IDI_APPLICATION :: 32512;
 
+IMAGE_BITMAP    :: 0;
+IMAGE_ICON      :: 1;
+IMAGE_CURSOR    :: 2;
+LR_DEFAULTCOLOR :: 0x0000;
+LR_SHARED       :: 0x8000;
+LoadImageW :: (hInst: HINSTANCE, name: *u16, type: u32, cx: s32, cy: s32, flags: u32) -> HANDLE #foreign User32;
+
 Get_Dpi_For_Monitor_Fn :: #type (hmonitor: HMONITOR, dpi_type: u32, dpi_x: *u32, dpi_y: *u32) -> HRESULT #c_call;
 
 dpi_resolver_tried:   bool;

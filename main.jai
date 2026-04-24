@@ -564,7 +564,13 @@ create_tray_icon :: (instance: HINSTANCE) {
     tray_icon.uID              = 1;
     tray_icon.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     tray_icon.uCallbackMessage = WM_TRAYICON;
-    tray_icon.hIcon            = LoadIconW(null, MAKEINTRESOURCEW(IDI_APPLICATION));
+
+   cx := GetSystemMetrics(SM_CXSMICON);
+    cy := GetSystemMetrics(SM_CYSMICON);
+    tray_icon.hIcon = cast(HICON) LoadImageW(instance, MAKEINTRESOURCEW(2), IMAGE_ICON, cx, cy, LR_DEFAULTCOLOR | LR_SHARED);
+    if !tray_icon.hIcon {
+        tray_icon.hIcon = LoadIconW(null, MAKEINTRESOURCEW(IDI_APPLICATION));
+    }
     defer user_message_flush_pending();
     update_tray_tip();
     Shell_NotifyIconW(NIM_ADD, *tray_icon);
