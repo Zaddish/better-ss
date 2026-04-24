@@ -1,4 +1,8 @@
-# BetterSS
+<p align="center">
+  <img src="icons/BSS_Tray.png" alt="BetterSS" width="128">
+</p>
+
+<h1 align="center">BetterSS</h1>
 
 A screenshot tool for Windows that does the job without the bloat.
 
