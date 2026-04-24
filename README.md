@@ -11,16 +11,14 @@ The ratio of ceremony to actual work is insane.
 
 ## How It Works
 
-On hotkey press (you can configure this in the tray icon context menu), BetterSS uses DXGI to grab the desktop framebuffer directly from the GPU, you can then select a region to capture. If you hold Shift during capture you can snap the selection to window boundaries.
+On hotkey press (configurable from the tray icon), BetterSS uses DXGI to grab the desktop framebuffer directly from the GPU. On NVIDIA with elevated privileges, it uses NVAPI scanout for a faster capture path. You then select a region to capture. Hold Shift to snap the selection to window boundaries.
 
-Right click drag will draw freehand red lines and Shift + right click drag will draw a filled rectangle box. Middle click or Ctrl+Z undoes the last annotation.
+Three annotation modes, LINE, HIGHLIGHT and CENSOR switchable via 1/2/3 keys, mouse wheel, or the settings panel (tab). Right click drag draws with the currently active mode. hold ctrl while drawing to lock to an axis. middle click or ctrl+z undoes the last annotation.
 
-Default hotkeys are Ctrl+Shift+S to capture to your clipboard and Ctrl+Shift+Alt+S to capture to a file.  Both are configurable from the tray icon.
+Press tab to open the settings panel that has an HSV colour wheel, colour presets, brush width and stabilisation sliders
 
-You can hold alt and right click to draw a highlight on the screen before capturing, similar to annotations.
-
-Escape cancels the capture.  
+Escape cancels the capture.
 
 ## Building
 
-Requires Visual Studio build tools and the Windows SDK.  You can build it via a developer command prompt via the `build.bat` file.  Output goes to `build\betterss.exe`
+you cant yet

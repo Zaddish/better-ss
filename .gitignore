@@ -1,10 +1,9 @@
 build/
+.build/
 .vscode/
-compile_flags.txt
 *.exe
 *.obj
 *.pdb
 *.ilk
 *_vs.h
 *_ps.h
-src/build_info.h

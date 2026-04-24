@@ -1,5 +1,3 @@
-/* BetterSS Line Annotation Shader */
-
 struct LineVertex
 {
     float2 Position : POSITION;

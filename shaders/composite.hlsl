@@ -1,5 +1,3 @@
-/* Highlight Commposite Shader */
-
 cbuffer CompositeConstants : register(b0)
 {
     float2 UVScale;
@@ -24,7 +22,8 @@ float4 PSMain(VS_OUTPUT Input) : SV_TARGET
     float Mask = 1.0 - dot(Highlight, float3(0.333, 0.334, 0.333));
 
     // brighten the scene toward highlight colour so the tint is visible on any background,
-    // then multiply it to preserve contrast between light and dark scene pixels.
+    // then multiply it to preserve contrast between light and dark scene pixels
+    // TODO(zaddish): refine this pls
     float Lum = dot(Scene, float3(0.299, 0.587, 0.114));
     float Lift = (1.0 - Lum) * 0.35;
     float3 Lifted = Scene + Highlight * Lift;

@@ -1,5 +1,3 @@
-/* BetterSS Overlay Shader */
-
 cbuffer OverlayConstants : register(b0)
 {
     float4 SelectionRect;
