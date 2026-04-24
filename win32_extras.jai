@@ -325,6 +325,7 @@ dpi_for_point :: (x: s32, y: s32) -> s32 {
         pt: POINT;
         pt.x = x;
         pt.y = y;
+        if overlay_window ClientToScreen(overlay_window, *pt);
         mon := MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
         if mon {
             dx: u32;
@@ -335,8 +336,6 @@ dpi_for_point :: (x: s32, y: s32) -> s32 {
         }
     }
 
-    // desktop DC, ignores per monitor scaling if we cant get it
-    // for whatever reason 
     dc := GetDC(null);
     result: s32 = 96;
     if dc {
