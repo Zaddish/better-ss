@@ -188,11 +188,13 @@ release_nv_capture :: (nv: *Nv_Capture) {
 }
 
 // D3DDDIFMT_A2B10G10R10 (format 31): R[9:0] G[19:10] B[29:20] A[31:30] -> B8G8R8A8
+// NOTE(zaddish): Jai does not group `<<` before `|` like C++ does here
+// if the shift terms are not wrapped then the channel packing comes out wrong
 convert_10bit :: inline (v: u32) -> u32 {
-    return ((v >>  2) & 0xFF) << 16
-         | ((v >> 12) & 0xFF) <<  8
-         | ((v >> 22) & 0xFF)
-         | 0xFF000000;
+    return (((v >>  2) & 0xFF) << 16)
+         | (((v >> 12) & 0xFF) <<  8)
+         |  ((v >> 22) & 0xFF)
+         |  0xFF000000;
 }
 
 convert_pixel :: inline (v: u32, is_10bit: bool) -> u32 {
