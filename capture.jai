@@ -120,23 +120,24 @@ capture_monitor :: (mon: *Monitor_Duplication, device: *ID3D11Device, timeout_ms
     hr = IUnknown_QueryInterface(resource, *uid(ID3D11Texture2D_UUID), xx *mon.texture);
     safe_release(resource);
 
-    if SUCCEEDED(hr) {
-        srv_desc: D3D11_SHADER_RESOURCE_VIEW_DESC;
-        srv_desc.Format                    = .B8G8R8A8_UNORM;
-        srv_desc.ViewDimension             = .TEXTURE2D;
-        srv_desc.Texture2D.MipLevels       = 1;
-
-        hr = ID3D11Device_CreateShaderResourceView(device, xx mon.texture, *srv_desc, *mon.srv);
-        if SUCCEEDED(hr) {
-            mon.has_frame = true;
-            return 1;
-        }
-
-        IUnknown_Release(mon.texture);
-        mon.texture = null;
+    if FAILED(hr) {
         IDXGIOutputDuplication_ReleaseFrame(mon.duplication);
+        return 0;
     }
 
+    srv_desc: D3D11_SHADER_RESOURCE_VIEW_DESC;
+    srv_desc.Format                    = .B8G8R8A8_UNORM;
+    srv_desc.ViewDimension             = .TEXTURE2D;
+    srv_desc.Texture2D.MipLevels       = 1;
+
+    hr = ID3D11Device_CreateShaderResourceView(device, xx mon.texture, *srv_desc, *mon.srv);
+    if SUCCEEDED(hr) {
+        mon.has_frame = true;
+        return 1;
+    }
+
+    safe_release_and_reset(*mon.texture);
+    IDXGIOutputDuplication_ReleaseFrame(mon.duplication);
     return 0;
 }
 
