@@ -464,6 +464,10 @@ IWICBitmapEncoder_Commit        :: inline (this: *IWICBitmapEncoder) -> HRESULT 
 
 IWICBitmapFrameEncode_Initialize     :: inline (this: *IWICBitmapFrameEncode, pIEncoderOptions: *IPropertyBag2) -> HRESULT { return this.iwicbitmapframeencode_vtable.Initialize(this, pIEncoderOptions); }
 IWICBitmapFrameEncode_SetSize        :: inline (this: *IWICBitmapFrameEncode, width: u32, height: u32) -> HRESULT { return this.iwicbitmapframeencode_vtable.SetSize(this, width, height); }
-IWICBitmapFrameEncode_SetPixelFormat :: inline (this: *IWICBitmapFrameEncode, pPixelFormat: *GUID) -> HRESULT { return this.iwicbitmapframeencode_vtable.SetPixelFormat(this, pPixelFormat); }
+IWICBitmapFrameEncode_SetPixelFormat :: inline (this: *IWICBitmapFrameEncode, requested_format: GUID) -> bool {
+    actual_format := requested_format;
+    if FAILED(this.iwicbitmapframeencode_vtable.SetPixelFormat(this, *actual_format)) return false;
+    return !memcmp(*actual_format, *requested_format, size_of(GUID));
+}
 IWICBitmapFrameEncode_WritePixels    :: inline (this: *IWICBitmapFrameEncode, lineCount: u32, cbStride: u32, cbBufferSize: u32, pbPixels: *u8) -> HRESULT { return this.iwicbitmapframeencode_vtable.WritePixels(this, lineCount, cbStride, cbBufferSize, pbPixels); }
 IWICBitmapFrameEncode_Commit         :: inline (this: *IWICBitmapFrameEncode) -> HRESULT { return this.iwicbitmapframeencode_vtable.Commit(this); }

@@ -162,7 +162,7 @@ save_pixels_to_file :: (factory: *IWICImagingFactory, pixels: *u8, width: u32, h
     if FAILED(IWICBitmapFrameEncode_Initialize(frame_encoder, null))                                                   return false;
     if FAILED(IWICBitmapFrameEncode_SetSize   (frame_encoder, width, height))                                          return false;
 
-    if FAILED(IWICBitmapFrameEncode_SetPixelFormat(frame_encoder, *GUID_WIC_PIXEL_FORMAT_32BPPBGRA)) return false;
+    if !IWICBitmapFrameEncode_SetPixelFormat(frame_encoder, GUID_WIC_PIXEL_FORMAT_32BPPBGRA) return false;
 
     row_bytes    : u32 = width * 4;
     buffer_bytes : u32 = ifx height > 0 then (height - 1) * pitch + row_bytes else 0;
