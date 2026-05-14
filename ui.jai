@@ -472,7 +472,7 @@ ui_draw_panel :: (r: *Betterss_Renderer, screen_w: s32, screen_h: s32) -> consum
     if is_line || is_highlight {
         panel_h += PADDING + ROW_HEIGHT;           // stabilise slider
     }
-    if is_line {
+    if is_line || is_highlight {
         panel_h += PADDING * 0.5 + ROW_HEIGHT;     // width slider
     }
     panel_h += PADDING + SWATCH_SIZE;              // presets
@@ -520,7 +520,7 @@ ui_draw_panel :: (r: *Betterss_Renderer, screen_w: s32, screen_h: s32) -> consum
 
     // width slider
     width_row: UI_Rect;
-    if is_line {
+    if is_line || is_highlight {
         _, inner = cut_top(inner, PADDING * 0.5);
         width_row, inner = cut_top(inner, ROW_HEIGHT);
         ui_slider(width_row, *ps.width, 1.0, 100.0, 301);
@@ -570,7 +570,7 @@ ui_draw_panel :: (r: *Betterss_Renderer, screen_w: s32, screen_h: s32) -> consum
         ui_defer_label(r, smooth_row.x, smooth_row.y, smooth_row.w, smooth_row.h, text);
     }
 
-    if is_line {
+    if is_line || is_highlight {
         text: string;
         if ps.text_editing && ps.text_editing_id == 301 {
             s: string; s.data = ps.text_buf.data; s.count = ps.text_len;

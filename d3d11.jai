@@ -532,7 +532,7 @@ render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s
     if !r.line_vertex_shader || !r.line_pixel_shader || !r.line_input_layout return;
     if !sel || sel.annotation_count == 0 return;
 
-    highlight_half_h : float = 20.0;
+    highlight_half_h_default : float = 20.0;
 
     annotations: [] Annotation_Entry;
     annotations.data  = sel.annotations;
@@ -599,7 +599,8 @@ render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s
     for * entry: annotations {
         if entry.type == .HIGHLIGHT && entry.point_count > 1 {
             start := vertex_index;
-            emit_highlight_segments(vertices, *vertex_index, entry, offset_x, offset_y, highlight_half_h);
+            half_h := ifx entry.line_width > 0 then entry.line_width else highlight_half_h_default;
+            emit_highlight_segments(vertices, *vertex_index, entry, offset_x, offset_y, half_h);
             if vertex_index > start && highlight_draw_count < MAX_DRAW_BATCHES {
                 highlight_draws[highlight_draw_count] = .{start, vertex_index - start, entry.color};
                 highlight_draw_count += 1;
