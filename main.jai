@@ -198,6 +198,11 @@ cursor_arrow:    HCURSOR;
 cursor_cross:    HCURSOR;
 cursor_size_all: HCURSOR;
 
+set_mode_cursor :: () {
+    if panel_state.is_open  SetCursor(cursor_arrow);
+    else                    SetCursor(ifx selection.annotation_mode == .CENSOR then cursor_cross else null);
+}
+
 wic_factory: *IWICImagingFactory;
 
 window_entries:  [] Window_Entry;
@@ -727,7 +732,7 @@ create_overlay_window :: (instance: HINSTANCE) -> HWND {
     wc.style         = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc   = xx window_proc;
     wc.hInstance     = instance;
-    wc.hCursor       = cursor_arrow;
+    wc.hCursor       = null;
     wc.lpszClassName = W_CLASS_OVERLAY.data;
     RegisterClassExW(*wc);
 
@@ -916,8 +921,7 @@ show_overlay :: () {
     SetCapture(overlay_window);
     ClipCursor(null);
 
-    SetCursor(cursor_cross);
-
+    set_mode_cursor();
     is_capturing = true;
     selection.is_selecting = true;
 }
@@ -977,6 +981,14 @@ render_overlay :: () -> bool {
     ID3D11DeviceContext_Draw                    (renderer.ctx, 3, 0);
 
     render_annotations(*renderer, *selection, 0, 0, cast(s32) renderer.width, cast(s32) renderer.height);
+
+    if !selection.is_dragging && selection.annotation_mode != .CENSOR {
+        ui_begin_frame();
+        render_brush_cursor(*renderer, selection.annotation_mode,
+                            cast(float) last_mouse_x, cast(float) last_mouse_y,
+                            panel_state.width, panel_state.color, *selection);
+        ui_flush(*renderer);
+    }
 
     mode_idx := cast(s32) selection.annotation_mode;
     if mode_idx >= 0 && mode_idx < MODE_LABEL_COUNT {
@@ -1112,6 +1124,7 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                             return 0;
                         }
                         panel_state.is_open = false;
+                        set_mode_cursor();
                     }
 
                     if !selection.is_annotating && !selection.is_censoring {
@@ -1125,6 +1138,7 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                         }
 
                         selection_begin(*selection, x, y);
+                        SetCursor(cursor_cross);
                     }
                 }
                 return 0;
@@ -1134,6 +1148,7 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 if is_capturing {
                     x := GET_X_LPARAM(lparam);
                     y := GET_Y_LPARAM(lparam);
+                    update_highlight_cursor_direction(cast(float)(x - last_mouse_x), cast(float)(y - last_mouse_y));
                     last_mouse_x = x;
                     last_mouse_y = y;
 
@@ -1206,6 +1221,7 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                         }
                         panel_state.is_open = false;
                     }
+                    set_mode_cursor();
                     mode     := selection.annotation_mode;
                     ctrl_held := (GetKeyState(VK_CONTROL) & 0x8000) != 0;
 
@@ -1221,7 +1237,7 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                         selection.snap_axis    = -1;
                     }
 
-                    SetCursor(cursor_size_all);
+                    SetCursor(null);
                 }
                 return 0;
             }
@@ -1231,12 +1247,11 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                     if selection.is_censoring {
                         censor_end(*selection);
                         refresh_overlay();
-                        SetCursor(cursor_cross);
                     } else if selection.is_annotating {
                         annotation_end(*selection);
                         refresh_overlay();
-                        SetCursor(cursor_cross);
                     }
+                    set_mode_cursor();
                 }
                 return 0;
             }
@@ -1250,11 +1265,7 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
             }
 
             case WM_SETCURSOR; {
-                if is_capturing {
-                    if selection.is_annotating || selection.is_censoring SetCursor(cursor_size_all);
-                    else                                                 SetCursor(cursor_cross);
-                    return 1;
-                }
+                if is_capturing return 1;
             }
 
             case WM_CHAR; {
@@ -1279,10 +1290,12 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                     if wparam == VK_ESCAPE {
                         if panel_state.is_open {
                             panel_state.is_open = false;
+                            set_mode_cursor();
                             refresh_overlay();
                         } else if selection.is_dragging {
                             selection_end(*selection);
                             selection_set_rect(*selection, RECT.{});
+                            set_mode_cursor();
                             refresh_overlay();
                         } else {
                             hide_overlay();
@@ -1296,11 +1309,13 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                             panel_state.anchor_x = last_mouse_x;
                             panel_state.anchor_y = last_mouse_y;
                         }
+                        set_mode_cursor();
                         refresh_overlay();
                     } else if !mid_stroke && live_mods == 0 && wparam >= #char "1" && wparam < #char "1" + ANNOTATION_MODE_COUNT {
                         panel_save_active();
                         selection.annotation_mode = cast(Annotation_Mode) (cast(s32) wparam - #char "1");
                         panel_sync_active();
+                        set_mode_cursor();
                         refresh_overlay();
                     }
                 }
@@ -1312,14 +1327,21 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                     mid_stroke := selection.is_annotating || selection.is_censoring || selection.is_dragging;
                     if !mid_stroke {
                         delta := GET_WHEEL_DELTA_WPARAM(wparam);
-                        mode := cast(s32) selection.annotation_mode;
-                        // NOTE(zaddish): assumes Delta != 0
-                        mode -= (cast(s32) delta >> 31) | 1;
-                        if mode < 0                          mode = ANNOTATION_MODE_COUNT - 1;
-                        if mode >= ANNOTATION_MODE_COUNT     mode = 0;
-                        panel_save_active();
-                        selection.annotation_mode = cast(Annotation_Mode) mode;
-                        panel_sync_active();
+                        ctrl_held := (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                        if ctrl_held && selection.annotation_mode != .CENSOR {
+                            step := ifx delta > 0 then 2.0 else -2.0;
+                            panel_state.width = clamp(panel_state.width + step, 1.0, 100.0);
+                            panel_save_active();
+                        } else {
+                            mode := cast(s32) selection.annotation_mode;
+                            mode -= (cast(s32) delta >> 31) | 1;
+                            if mode < 0                          mode = ANNOTATION_MODE_COUNT - 1;
+                            if mode >= ANNOTATION_MODE_COUNT     mode = 0;
+                            panel_save_active();
+                            selection.annotation_mode = cast(Annotation_Mode) mode;
+                            panel_sync_active();
+                            set_mode_cursor();
+                        }
                         refresh_overlay();
                     }
                 }

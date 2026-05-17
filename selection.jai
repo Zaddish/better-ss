@@ -155,7 +155,7 @@ annotation_update :: (s: *Selection_State, x: s32, y: s32) {
         last := entry.points.data[entry.point_count - 1];
         pdx := sx - last.x;
         pdy := sy - last.y;
-        min_dist : s32 = xx (ifx entry.type == .HIGHLIGHT then 400 else 4);
+        min_dist : s32 = 4;
         if pdx * pdx + pdy * pdy < min_dist return;
     }
 

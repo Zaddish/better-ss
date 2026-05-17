@@ -83,6 +83,11 @@ Betterss_Renderer :: struct {
     label_cache: Label_Cache;
     alpha_blend: *ID3D11BlendState;
 
+    sdf_pixel_shader:   *ID3D11PixelShader;
+    sdf_point_buffer:   *ID3D11Buffer;
+    sdf_point_srv:      *ID3D11ShaderResourceView;
+    sdf_point_capacity: u32;
+
     ui_vertex_shader:  *ID3D11VertexShader;
     ui_pixel_shader:   *ID3D11PixelShader;
     ui_input_layout:   *ID3D11InputLayout;
@@ -115,6 +120,7 @@ LINE_PS         :: #run compile_shader(tprint("%shaders/line.hlsl",      #filepa
 COMPOSITE_PS    :: #run compile_shader(tprint("%shaders/composite.hlsl", #filepath), "PSMain", "ps_5_0");
 UI_VS           :: #run compile_shader(tprint("%shaders/ui.hlsl",        #filepath), "VSMain", "vs_5_0");
 UI_PS           :: #run compile_shader(tprint("%shaders/ui.hlsl",        #filepath), "PSMain", "ps_5_0");
+SDF_PS          :: #run compile_shader(tprint("%shaders/line_sdf.hlsl",  #filepath), "PSMain", "ps_5_0");
 
 // baked GDI / HLSL strings
 // see bake_wide / bake_cstr in main
@@ -333,6 +339,8 @@ initialize_line_renderer :: (r: *Betterss_Renderer) {
     r.line_vertex_buffer_capacity = 4096;
     create_dynamic_buffer(r.device, *r.line_vertex_buffer, r.line_vertex_buffer_capacity * size_of(Line_Vertex), .VERTEX_BUFFER);
 
+    ID3D11Device_CreatePixelShader(r.device, SDF_PS.data, xx SDF_PS.count, null, *r.sdf_pixel_shader);
+
     raster_desc: D3D11_RASTERIZER_DESC;
     raster_desc.FillMode        = .SOLID;
     raster_desc.CullMode        = .NONE;
@@ -538,47 +546,40 @@ render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s
     annotations.data  = sel.annotations;
     annotations.count = sel.annotation_count;
 
-    // Chaikin can expand points ~8x at 3 iterations; budget accordingly
     max_vertices: s32 = 0;
+    has_sdf_lines := false;
     for * entry: annotations {
-        expanded := entry.point_count * 8;
         if #complete entry.type == {
-            case .LINE;       #through;
-            case .HIGHLIGHT;  if entry.point_count > 1 max_vertices += expanded * 6;
+            case .LINE;       if entry.point_count > 0 has_sdf_lines = true;
+            case .HIGHLIGHT;  if entry.point_count > 1 max_vertices += entry.point_count * 8 * 6;
             case .RECT;       max_vertices += 6;
         }
     }
-    if max_vertices == 0 return;
+    if max_vertices == 0 && !has_sdf_lines return;
 
-    if max_vertices > cast(s32) r.line_vertex_buffer_capacity {
-        safe_release_and_reset(*r.line_vertex_buffer);
-        r.line_vertex_buffer_capacity = ceil_pow2(cast(u32) max_vertices * 2);
-        create_dynamic_buffer(r.device, *r.line_vertex_buffer, r.line_vertex_buffer_capacity * size_of(Line_Vertex), .VERTEX_BUFFER);
-    }
-    if !r.line_vertex_buffer return;
-
-    mapped: D3D11_MAPPED_SUBRESOURCE;
-    if !SUCCEEDED(ID3D11DeviceContext_Map(r.ctx, xx r.line_vertex_buffer, 0, .WRITE_DISCARD, 0, *mapped)) return;
-
-    vertices := cast(*Line_Vertex) mapped.pData;
+    vertices: *Line_Vertex;
     vertex_index: s32 = 0;
+    mapped: D3D11_MAPPED_SUBRESOURCE;
+
+    if max_vertices > 0 {
+        if max_vertices > cast(s32) r.line_vertex_buffer_capacity {
+            safe_release_and_reset(*r.line_vertex_buffer);
+            r.line_vertex_buffer_capacity = ceil_pow2(cast(u32) max_vertices * 2);
+            create_dynamic_buffer(r.device, *r.line_vertex_buffer, r.line_vertex_buffer_capacity * size_of(Line_Vertex), .VERTEX_BUFFER);
+        }
+        if !r.line_vertex_buffer return;
+        if !SUCCEEDED(ID3D11DeviceContext_Map(r.ctx, xx r.line_vertex_buffer, 0, .WRITE_DISCARD, 0, *mapped)) return;
+        vertices = cast(*Line_Vertex) mapped.pData;
+    }
 
     opaque_draws:    [MAX_DRAW_BATCHES] Annotation_Draw;
     opaque_draw_count: s32 = 0;
     highlight_draws: [MAX_DRAW_BATCHES] Annotation_Draw;
     highlight_draw_count: s32 = 0;
 
-    // opaque pass: lines + rects
+    // rects + highlights go into the vertex buffer
     for * entry: annotations {
-        if entry.type == .LINE {
-            if entry.point_count <= 1 continue;
-            start := vertex_index;
-            emit_line_segments(vertices, *vertex_index, entry, offset_x, offset_y, entry.line_width);
-            if vertex_index > start && opaque_draw_count < MAX_DRAW_BATCHES {
-                opaque_draws[opaque_draw_count] = .{start, vertex_index - start, entry.color};
-                opaque_draw_count += 1;
-            }
-        } else if entry.type == .RECT {
+        if entry.type == .RECT {
             start := vertex_index;
             left   := cast(float) (entry.x0 + offset_x);
             top    := cast(float) (entry.y0 + offset_y);
@@ -591,13 +592,7 @@ render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s
                 opaque_draws[opaque_draw_count] = .{start, vertex_index - start, entry.color};
                 opaque_draw_count += 1;
             }
-        }
-    }
-    opaque_total := vertex_index;
-
-    // highlight pass vertices
-    for * entry: annotations {
-        if entry.type == .HIGHLIGHT && entry.point_count > 1 {
+        } else if entry.type == .HIGHLIGHT && entry.point_count > 1 {
             start := vertex_index;
             half_h := ifx entry.line_width > 0 then entry.line_width else highlight_half_h_default;
             emit_highlight_segments(vertices, *vertex_index, entry, offset_x, offset_y, half_h);
@@ -608,8 +603,9 @@ render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s
         }
     }
 
-    ID3D11DeviceContext_Unmap(r.ctx, xx r.line_vertex_buffer, 0);
+    if vertices ID3D11DeviceContext_Unmap(r.ctx, xx r.line_vertex_buffer, 0);
 
+    // rect draws via the old line shader
     stride : u32 = size_of(Line_Vertex);
     buf_offset : u32 = 0;
     ID3D11DeviceContext_IASetVertexBuffers(r.ctx, 0, 1, *r.line_vertex_buffer, *stride, *buf_offset);
@@ -688,6 +684,34 @@ render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s
     }
 
     ID3D11DeviceContext_RSSetState(r.ctx, null);
+
+    // SDF lines
+    if has_sdf_lines && r.sdf_pixel_shader {
+        sdf_stride : u32 = size_of(Line_Vertex);
+        sdf_offset : u32 = 0;
+        ID3D11DeviceContext_IASetVertexBuffers(r.ctx, 0, 1, *r.line_vertex_buffer, *sdf_stride, *sdf_offset);
+        ID3D11DeviceContext_IASetInputLayout(r.ctx, r.line_input_layout);
+        ID3D11DeviceContext_IASetPrimitiveTopology(r.ctx, .TRIANGLELIST);
+        ID3D11DeviceContext_VSSetShader(r.ctx, r.line_vertex_shader, null, 0);
+        ID3D11DeviceContext_PSSetShader(r.ctx, r.sdf_pixel_shader, null, 0);
+        ID3D11DeviceContext_VSSetConstantBuffers(r.ctx, 0, 1, *r.line_const_buffer);
+        ID3D11DeviceContext_PSSetConstantBuffers(r.ctx, 0, 1, *r.line_const_buffer);
+        if r.no_cull_state ID3D11DeviceContext_RSSetState(r.ctx, r.no_cull_state);
+        blend_factor: [4] float;
+        ID3D11DeviceContext_OMSetBlendState(r.ctx, r.alpha_blend, *blend_factor, 0xFFFFFFFF);
+
+        for * entry: annotations {
+            if entry.type == .LINE && entry.point_count > 0 {
+                sdf_draw(r, entry.points.data, entry.point_count, offset_x, offset_y,
+                         entry.line_width * 0.5, entry.color, 1.0, target_w, target_h);
+            }
+        }
+
+        ID3D11DeviceContext_OMSetBlendState(r.ctx, null, *blend_factor, 0xFFFFFFFF);
+        ID3D11DeviceContext_RSSetState(r.ctx, null);
+        null_srv: *ID3D11ShaderResourceView;
+        ID3D11DeviceContext_PSSetShaderResources(r.ctx, 0, 1, *null_srv);
+    }
 }
 
 bake_mode_label :: (device: *ID3D11Device, text: *u16, font_height: s32) -> Mode_Label {
@@ -782,6 +806,118 @@ bake_mode_label :: (device: *ID3D11Device, text: *u16, font_height: s32) -> Mode
     DeleteObject(bitmap);
     DeleteObject(font);
     return result;
+}
+
+sdf_draw :: (r: *Betterss_Renderer, points: *Line_Point, count: s32, offset_x: s32, offset_y: s32, radius: float, color: Vector3, alpha: float, screen_w: s32, screen_h: s32) {
+    if count < 1 return;
+
+    if cast(u32) count > r.sdf_point_capacity {
+        safe_release_and_reset(*r.sdf_point_srv);
+        safe_release_and_reset(*r.sdf_point_buffer);
+        r.sdf_point_capacity = ceil_pow2(max(cast(u32) count, 256));
+        desc: D3D11_BUFFER_DESC;
+        desc.ByteWidth           = r.sdf_point_capacity * 8;
+        desc.Usage               = .DYNAMIC;
+        desc.BindFlags           = .SHADER_RESOURCE;
+        desc.CPUAccessFlags      = .WRITE;
+        desc.MiscFlags           = .BUFFER_STRUCTURED;
+        desc.StructureByteStride = 8;
+        ID3D11Device_CreateBuffer(r.device, *desc, null, *r.sdf_point_buffer);
+        srv_desc: D3D11_SHADER_RESOURCE_VIEW_DESC;
+        srv_desc.Format        = .UNKNOWN;
+        srv_desc.ViewDimension = .BUFFER;
+        srv_desc.Buffer.NumElements = r.sdf_point_capacity;
+        ID3D11Device_CreateShaderResourceView(r.device, xx r.sdf_point_buffer, *srv_desc, *r.sdf_point_srv);
+    }
+    if !r.sdf_point_buffer return;
+
+    mapped: D3D11_MAPPED_SUBRESOURCE;
+    if !SUCCEEDED(ID3D11DeviceContext_Map(r.ctx, xx r.sdf_point_buffer, 0, .WRITE_DISCARD, 0, *mapped)) return;
+    dst := cast(*[2] float) mapped.pData;
+    min_x :=  99999.0;
+    min_y :=  99999.0;
+    max_x := -99999.0;
+    max_y := -99999.0;
+    for i: 0 .. count - 1 {
+        px := cast(float) (points[i].x + offset_x);
+        py := cast(float) (points[i].y + offset_y);
+        dst[i] = .[px, py];
+        if px < min_x min_x = px;
+        if px > max_x max_x = px;
+        if py < min_y min_y = py;
+        if py > max_y max_y = py;
+    }
+    ID3D11DeviceContext_Unmap(r.ctx, xx r.sdf_point_buffer, 0);
+
+    pad := radius + 2.0;
+    quad_verts: [6] Line_Vertex;
+    quad_verts[0].position = .[min_x - pad, min_y - pad];
+    quad_verts[1].position = .[max_x + pad, min_y - pad];
+    quad_verts[2].position = .[min_x - pad, max_y + pad];
+    quad_verts[3].position = .[max_x + pad, min_y - pad];
+    quad_verts[4].position = .[max_x + pad, max_y + pad];
+    quad_verts[5].position = .[min_x - pad, max_y + pad];
+
+    if !SUCCEEDED(ID3D11DeviceContext_Map(r.ctx, xx r.line_vertex_buffer, 0, .WRITE_DISCARD, 0, *mapped)) return;
+    memcpy(mapped.pData, quad_verts.data, 6 * size_of(Line_Vertex));
+    ID3D11DeviceContext_Unmap(r.ctx, xx r.line_vertex_buffer, 0);
+
+    constants: Line_Const_Buffer;
+    constants.screen_size = .[cast(float) screen_w, cast(float) screen_h];
+    constants.line_width  = radius;
+    constants.padding     = cast(float) count;
+    constants.line_color  = .[color.x, color.y, color.z, alpha];
+    update_constant_buffer(r.ctx, r.line_const_buffer, *constants, size_of(Line_Const_Buffer));
+
+    ID3D11DeviceContext_PSSetShaderResources(r.ctx, 0, 1, *r.sdf_point_srv);
+    ID3D11DeviceContext_Draw(r.ctx, 6, 0);
+}
+
+CURSOR_RING_SEGS :: 24;
+
+highlight_cursor_nx: float = 0.0;
+highlight_cursor_ny: float = -1.0;
+
+update_highlight_cursor_direction :: (dx: float, dy: float) {
+    d := sqrt(dx*dx + dy*dy);
+    if d < 0.5 return;
+    target_nx := -dy / d;
+    target_ny :=  dx / d;
+    highlight_cursor_nx += (target_nx - highlight_cursor_nx) * 0.1;
+    highlight_cursor_ny += (target_ny - highlight_cursor_ny) * 0.1;
+    nd := sqrt(highlight_cursor_nx * highlight_cursor_nx + highlight_cursor_ny * highlight_cursor_ny);
+    if nd > 0.0001 { highlight_cursor_nx /= nd; highlight_cursor_ny /= nd; }
+}
+
+render_brush_cursor :: (r: *Betterss_Renderer, mode: Annotation_Mode, cx: float, cy: float, width: float, color: Vector3, sel: *Selection_State) {
+    if width < 1.0 return;
+    c := Vector4.{color.x, color.y, color.z, 0.5};
+
+    if mode == .LINE {
+        radius := width * 0.5;
+        inner  := max(radius - 1.5, 0.0);
+        for i: 0 .. CURSOR_RING_SEGS - 1 {
+            a0 := cast(float) i       * (TAU / CURSOR_RING_SEGS);
+            a1 := cast(float) (i + 1) * (TAU / CURSOR_RING_SEGS);
+            c0 := cos(a0); s0 := sin(a0);
+            c1 := cos(a1); s1 := sin(a1);
+            ui_emit_triangle(cx+c0*inner, cy+s0*inner, cx+c0*radius, cy+s0*radius, cx+c1*radius, cy+s1*radius, c, c, c);
+            ui_emit_triangle(cx+c0*inner, cy+s0*inner, cx+c1*radius, cy+s1*radius, cx+c1*inner, cy+s1*inner, c, c, c);
+        }
+    } else if mode == .HIGHLIGHT {
+        nx := highlight_cursor_nx;
+        ny := highlight_cursor_ny;
+        half_w := width;
+        t : float = 1.5;
+        lx := cx + nx * half_w;
+        ly := cy + ny * half_w;
+        rx := cx - nx * half_w;
+        ry := cy - ny * half_w;
+        px := -ny;
+        py :=  nx;
+        ui_emit_triangle(lx-px*t, ly-py*t, lx+px*t, ly+py*t, rx+px*t, ry+py*t, c, c, c);
+        ui_emit_triangle(lx-px*t, ly-py*t, rx+px*t, ry+py*t, rx-px*t, ry-py*t, c, c, c);
+    }
 }
 
 release_mode_label :: (label: *Mode_Label) {
