@@ -756,10 +756,6 @@ create_overlay_window :: (instance: HINSTANCE) -> HWND {
     return window;
 }
 
-cloak_window :: (window: HWND, cloak: BOOL) {
-    DwmSetWindowAttribute(window, DWMWA_CLOAK, xx *cloak, size_of(BOOL));
-}
-
 rect_offset :: (r: RECT, dx: s32, dy: s32) -> RECT {
     out := r;
     out.left   += dx;
@@ -846,13 +842,12 @@ update_snap_preview :: (mouse_x: s32, mouse_y: s32) {
 }
 
 show_overlay :: () {
+    // the swap chain lives for the whole window lifetime, see acquire_renderer
     if !renderer.device {
         renderer = acquire_renderer(overlay_window);
         if !renderer_is_valid(*renderer) return;
         if !initialize_shaders(*renderer) return;
         release_duplications(*capture);
-    } else if !renderer.swap_chain {
-        if !acquire_swap_chain_for_renderer(*renderer, overlay_window) return;
     }
 
     captured_ok := false;
@@ -910,10 +905,6 @@ show_overlay :: () {
 
     if !render_overlay() return;
 
-    // NOTE(zaddish): we have to block until the DWM finishes its current composition pass
-    // by the time it returns, the surface the DWM has for our HWND is the correct one
-    // if we do not do this, we get a flash of the previously cached frame DWM has,
-    // and that is not very pleasant to the user. we have to wait a full vsync unfortunately
     DwmFlush();
     ShowWindow(overlay_window, SW_SHOW);
     SetForegroundWindow(overlay_window);
@@ -934,8 +925,13 @@ hide_overlay :: () {
     save_settings();
 
     selection_reset(*selection);
-    release_swap_chain(*renderer);
 
+    // NOTE(zaddish): dont destroy the swap chain here because a flip model swap chain
+    // has to be the only one ever associated with its HWND, and D3D11 defers destruction of a
+    // released flip swap chain
+    // its buffers stay shared with the DWM so destroying and recreating it per capture left
+    // the DWM compositing the prevous swap chains last frame for one frame on the next reveal
+    // so we keep one swap chain for the windows lifetime and ResizeBuffers on display change
     release_session_textures(*renderer);
 
     SetCursor(cursor_arrow);
@@ -1361,6 +1357,7 @@ window_proc :: (window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 vw := GetSystemMetrics(SM_CXVIRTUALSCREEN);
                 vh := GetSystemMetrics(SM_CYVIRTUALSCREEN);
                 SetWindowPos(window, null, vx, vy, vw, vh, SWP_NOZORDER | SWP_NOACTIVATE);
+                renderer_resize(*renderer, cast(u32) vw, cast(u32) vh);
                 // any cached glyph texture could now be at the wrong effective DPI
                 // so im gonna bake lazily again
                 label_cache_invalidate(*renderer.label_cache);

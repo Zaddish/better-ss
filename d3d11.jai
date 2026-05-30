@@ -244,17 +244,6 @@ release_render_target :: (r: *Betterss_Renderer) {
     safe_release_and_reset(*r.render_target);
 }
 
-release_swap_chain :: (r: *Betterss_Renderer) {
-    release_render_target(r);
-    if r.ctx {
-        ID3D11DeviceContext_ClearState(r.ctx);
-        ID3D11DeviceContext_Flush(r.ctx);
-    }
-    safe_release_and_reset(*r.swap_chain);
-    r.width  = 0;
-    r.height = 0;
-}
-
 renderer_resize :: (r: *Betterss_Renderer, w: u32, h: u32) {
     if w == 0 || h == 0 return;
     if w == r.width && h == r.height return;
@@ -319,15 +308,6 @@ acquire_renderer :: (window: HWND) -> Betterss_Renderer {
 
     if !renderer_is_valid(*result) release_renderer(*result);
     return result;
-}
-
-acquire_swap_chain_for_renderer :: (r: *Betterss_Renderer, window: HWND) -> bool {
-    r.swap_chain = acquire_swap_chain(r.device, window);
-    if !r.swap_chain return false;
-    client_rect: RECT;
-    GetClientRect(window, *client_rect);
-    renderer_resize(r, cast(u32) client_rect.right, cast(u32) client_rect.bottom);
-    return r.render_target != null;
 }
 
 renderer_present :: (r: *Betterss_Renderer) -> bool {
