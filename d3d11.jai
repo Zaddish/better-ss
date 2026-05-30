@@ -48,11 +48,28 @@ Mode_Label :: struct {
     height:  s32;
 }
 
+// every texture in here is born when a capture starts and dies when it ends, the
+// same lifetime as capture_arena.  grouping them gives one teardown point
+// (release_session_textures) that mirrors reset(arena), instead of a release call
+// per field to remember to keep in sync
+// i feel like this is better, but we'll have to see once i need to touch it again
+Session_Textures :: struct {
+    cached_staging:    Cached_Texture;
+    cached_render:     Cached_Texture;
+    cached_background: Cached_Texture;
+    highlight_texture: Cached_Texture;
+    scene_copy:        Cached_Texture;
+}
+
 Betterss_Renderer :: struct {
     device:        *ID3D11Device;
     ctx:           *ID3D11DeviceContext;
     swap_chain:    *IDXGISwapChain1;
     render_target: *ID3D11RenderTargetView;
+    // set once at the end of a full, checked bring up. when true, every device
+    // lifetime shader/buffer/state/sampler below is guaranteed non null, so the
+    // render path trusts them instead of null checking each handle every use
+    ready:         bool;
 
     vertex_shader:   *ID3D11VertexShader;
     overlay_shader:  *ID3D11PixelShader;
@@ -69,16 +86,12 @@ Betterss_Renderer :: struct {
     line_input_layout:  *ID3D11InputLayout;
     line_vertex_buffer_capacity: u32;
 
-    cached_staging:    Cached_Texture;
-    cached_render:     Cached_Texture;
-    cached_background: Cached_Texture;
+    using session: Session_Textures;
 
     no_cull_state: *ID3D11RasterizerState;
 
     composite_shader:         *ID3D11PixelShader;
     composite_constant_buffer: *ID3D11Buffer;
-    highlight_texture:        Cached_Texture;
-    scene_copy:               Cached_Texture;
 
     label_cache: Label_Cache;
     alpha_blend: *ID3D11BlendState;
@@ -211,6 +224,22 @@ release_cached_texture :: (c: *Cached_Texture) {
     c.height = 0;
 }
 
+// teardown for the whole session texture group by walking Session_Textures at
+// comptime, so a texture added to that struct is released here automatically with
+// no release call to remember
+// this is so cool!
+generate_session_release_body :: (info: *Type_Info_Struct) -> string {
+    b: String_Builder;
+    for member: info.members {
+        print_to_builder(*b, "release_cached_texture(*r.session.%);\n", member.name);
+    }
+    return builder_to_string(*b);
+}
+
+release_session_textures :: (r: *Betterss_Renderer) {
+    #insert #run generate_session_release_body(type_info(Session_Textures));
+}
+
 release_render_target :: (r: *Betterss_Renderer) {
     safe_release_and_reset(*r.render_target);
 }
@@ -250,11 +279,7 @@ renderer_resize :: (r: *Betterss_Renderer, w: u32, h: u32) {
 }
 
 release_renderer :: (r: *Betterss_Renderer) {
-    release_cached_texture(*r.cached_render);
-    release_cached_texture(*r.cached_staging);
-    release_cached_texture(*r.highlight_texture);
-    release_cached_texture(*r.scene_copy);
-    release_cached_texture(*r.cached_background);
+    release_session_textures(r);
 
     label_cache_release(*r.label_cache);
 
@@ -315,9 +340,7 @@ renderer_present :: (r: *Betterss_Renderer) -> bool {
     return true;
 }
 
-initialize_line_renderer :: (r: *Betterss_Renderer) {
-    if !r.device return;
-
+initialize_line_renderer :: (r: *Betterss_Renderer) -> bool {
     ID3D11Device_CreateVertexShader(r.device, LINE_VS.data, xx LINE_VS.count, null, *r.line_vertex_shader);
     ID3D11Device_CreatePixelShader (r.device, LINE_PS.data, xx LINE_PS.count, null, *r.line_pixel_shader);
     ID3D11Device_CreatePixelShader (r.device, COMPOSITE_PS.data, xx COMPOSITE_PS.count, null, *r.composite_shader);
@@ -346,11 +369,13 @@ initialize_line_renderer :: (r: *Betterss_Renderer) {
     raster_desc.CullMode        = .NONE;
     raster_desc.DepthClipEnable = xx BOOL.TRUE;
     ID3D11Device_CreateRasterizerState(r.device, *raster_desc, *r.no_cull_state);
+
+    return r.line_vertex_shader != null && r.line_pixel_shader != null && r.composite_shader != null
+        && r.line_input_layout != null && r.line_const_buffer != null && r.composite_constant_buffer != null
+        && r.line_vertex_buffer != null && r.sdf_pixel_shader != null && r.no_cull_state != null;
 }
 
-initialize_ui_renderer :: (r: *Betterss_Renderer) {
-    if !r.device return;
-
+initialize_ui_renderer :: (r: *Betterss_Renderer) -> bool {
     ID3D11Device_CreateVertexShader(r.device, UI_VS.data, xx UI_VS.count, null, *r.ui_vertex_shader);
     ID3D11Device_CreatePixelShader (r.device, UI_PS.data, xx UI_PS.count, null, *r.ui_pixel_shader);
 
@@ -370,11 +395,13 @@ initialize_ui_renderer :: (r: *Betterss_Renderer) {
 
     r.ui_vertex_buffer_capacity = 8192;
     create_dynamic_buffer(r.device, *r.ui_vertex_buffer, r.ui_vertex_buffer_capacity * size_of(UI_Vertex), .VERTEX_BUFFER);
+
+    return r.ui_vertex_shader != null && r.ui_pixel_shader != null && r.ui_input_layout != null
+        && r.ui_const_buffer != null && r.ui_vertex_buffer != null;
 }
 
 render_ui_geometry :: (r: *Betterss_Renderer, vertices: *UI_Vertex, vertex_count: s32) {
     if vertex_count <= 0 return;
-    if !r.ui_vertex_shader || !r.ui_pixel_shader || !r.ui_input_layout return;
 
     if cast(u32) vertex_count > r.ui_vertex_buffer_capacity {
         safe_release_and_reset(*r.ui_vertex_buffer);
@@ -537,7 +564,6 @@ Annotation_Draw :: struct {
 MAX_DRAW_BATCHES :: 256;
 
 render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s32, offset_y: s32, target_w: s32, target_h: s32) {
-    if !r.line_vertex_shader || !r.line_pixel_shader || !r.line_input_layout return;
     if !sel || sel.annotation_count == 0 return;
 
     highlight_half_h_default : float = 20.0;
@@ -616,7 +642,7 @@ render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s
     ID3D11DeviceContext_VSSetConstantBuffers(r.ctx, 0, 1, *r.line_const_buffer);
     ID3D11DeviceContext_PSSetConstantBuffers(r.ctx, 0, 1, *r.line_const_buffer);
 
-    if r.no_cull_state ID3D11DeviceContext_RSSetState(r.ctx, r.no_cull_state);
+    ID3D11DeviceContext_RSSetState(r.ctx, r.no_cull_state);
 
     for i: 0 .. opaque_draw_count - 1 {
         d := opaque_draws[i];
@@ -624,7 +650,7 @@ render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s
         ID3D11DeviceContext_Draw(r.ctx, cast(u32) d.vertex_count, cast(u32) d.start_vertex);
     }
 
-    if highlight_draw_count > 0 && r.composite_shader {
+    if highlight_draw_count > 0 {
         prev_rtv: *ID3D11RenderTargetView;
         ID3D11DeviceContext_OMGetRenderTargets(r.ctx, 1, *prev_rtv, null);
 
@@ -686,7 +712,7 @@ render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s
     ID3D11DeviceContext_RSSetState(r.ctx, null);
 
     // SDF lines
-    if has_sdf_lines && r.sdf_pixel_shader {
+    if has_sdf_lines {
         sdf_stride : u32 = size_of(Line_Vertex);
         sdf_offset : u32 = 0;
         ID3D11DeviceContext_IASetVertexBuffers(r.ctx, 0, 1, *r.line_vertex_buffer, *sdf_stride, *sdf_offset);
@@ -696,7 +722,7 @@ render_annotations :: (r: *Betterss_Renderer, sel: *Selection_State, offset_x: s
         ID3D11DeviceContext_PSSetShader(r.ctx, r.sdf_pixel_shader, null, 0);
         ID3D11DeviceContext_VSSetConstantBuffers(r.ctx, 0, 1, *r.line_const_buffer);
         ID3D11DeviceContext_PSSetConstantBuffers(r.ctx, 0, 1, *r.line_const_buffer);
-        if r.no_cull_state ID3D11DeviceContext_RSSetState(r.ctx, r.no_cull_state);
+        ID3D11DeviceContext_RSSetState(r.ctx, r.no_cull_state);
         blend_factor: [4] float;
         ID3D11DeviceContext_OMSetBlendState(r.ctx, r.alpha_blend, *blend_factor, 0xFFFFFFFF);
 
@@ -927,7 +953,7 @@ release_mode_label :: (label: *Mode_Label) {
 }
 
 render_mode_label :: (r: *Betterss_Renderer, label: *Mode_Label, cursor_x: s32, cursor_y: s32, screen_w: s32, screen_h: s32) {
-    if !label.srv || !r.vertex_shader || !r.overlay_shader || !r.alpha_blend return;
+    if !label.srv return;
 
     off_x := label.height;
     off_y := -(label.height * 3 / 2);
@@ -1014,13 +1040,14 @@ cache_monitor_background :: (r: *Betterss_Renderer, c: *Capture_State) {
     ID3D11DeviceContext_OMSetRenderTargets(r.ctx, 1, *null_rtv, null);
 }
 
-initialize_shaders :: (r: *Betterss_Renderer) {
+initialize_shaders :: (r: *Betterss_Renderer) -> bool {
+    if !r.device { r.ready = false; return false; }
+
     ID3D11Device_CreateVertexShader(r.device, OVERLAY_VS.data, xx OVERLAY_VS.count, null, *r.vertex_shader);
     ID3D11Device_CreatePixelShader (r.device, OVERLAY_PS.data, xx OVERLAY_PS.count, null, *r.overlay_shader);
 
-    initialize_line_renderer(r);
-    initialize_ui_renderer(r);
-
+    line_ok := initialize_line_renderer(r);
+    ui_ok   := initialize_ui_renderer(r);
 
     blend_desc: D3D11_BLEND_DESC;
     blend_desc.RenderTarget[0].BlendEnable           = xx BOOL.TRUE;
@@ -1032,4 +1059,14 @@ initialize_shaders :: (r: *Betterss_Renderer) {
     blend_desc.RenderTarget[0].BlendOpAlpha          = .ADD;
     blend_desc.RenderTarget[0].RenderTargetWriteMask = xx D3D11_COLOR_WRITE_ENABLE.ALL;
     ID3D11Device_CreateBlendState(r.device, *blend_desc, *r.alpha_blend);
+
+    // one success/failure for the whole device lifetime resource set
+    // onstant_buffer and sampler are created back in acquire_renderer,
+    // so they get verified here too and if any creation failed its 
+    // pointer is still null and ready stays false
+    r.ready = line_ok && ui_ok
+        && r.vertex_shader   != null && r.overlay_shader != null
+        && r.constant_buffer != null && r.sampler        != null
+        && r.alpha_blend     != null;
+    return r.ready;
 }

@@ -197,29 +197,52 @@ convert_10bit :: inline (v: u32) -> u32 {
          |  0xFF000000;
 }
 
-convert_pixel :: inline (v: u32, is_10bit: bool) -> u32 {
-    return ifx is_10bit then convert_10bit(v) else v;
-}
-
 // NOTE(zaddish): all monitors return format 31 regardless of actual panel bit depth,
 // not sure why, maybe DWM composites at that depth and the driver upscales at scanout?
 // if a display is in HDR mode the scanout might be PQ encoded (BT.2100 ST.2084) instead of
 // the sRGB ish values i'm assuming here, which would make this conversion look washed out
 // no working HDR10 display to test so we can just handle SDR for now
 // https://learn.microsoft.com/en-us/windows/win32/direct3darticles/high-dynamic-range
-convert_pixels :: (dst: *u32, dst_w: u32, src: *u32, src_w: u32, src_h: u32, rotation: u32, is_10bit: bool) {
+//
+// rotation and bit depth are constant for the entire frame, so i can just bake them into the
+// loop as comptime params
+// the inner body over millions of pixels is then branch free!!
+// dont have to redecide the rotation map and the conversion on every pixel
+convert_pixels_impl :: (dst: *u32, dst_w: u32, src: *u32, src_w: u32, src_h: u32, $rotation: u32, $is_10bit: bool) {
     for src_y: 0 .. src_h - 1 {
         for src_x: 0 .. src_w - 1 {
             dst_x, dst_y: u32;
-            if rotation == {
-                case 2; dst_x = src_h - 1 - src_y; dst_y = src_x;
-                case 3; dst_x = src_w - 1 - src_x; dst_y = src_h - 1 - src_y;
-                case 4; dst_x = src_y;             dst_y = src_w - 1 - src_x;
-                case;   dst_x = src_x;             dst_y = src_y;
+            #if rotation == 2 {
+                dst_x = src_h - 1 - src_y; dst_y = src_x;
+            } else #if rotation == 3 {
+                dst_x = src_w - 1 - src_x; dst_y = src_h - 1 - src_y;
+            } else #if rotation == 4 {
+                dst_x = src_y;             dst_y = src_w - 1 - src_x;
+            } else {
+                dst_x = src_x;             dst_y = src_y;
             }
-            dst[dst_y * dst_w + dst_x] = convert_pixel(src[src_y * src_w + src_x], is_10bit);
+            v := src[src_y * src_w + src_x];
+            #if is_10bit {
+                dst[dst_y * dst_w + dst_x] = convert_10bit(v);
+            } else {
+                dst[dst_y * dst_w + dst_x] = v;
+            }
         }
     }
+}
+
+convert_pixels_rotation :: (dst: *u32, dst_w: u32, src: *u32, src_w: u32, src_h: u32, rotation: u32, $is_10bit: bool) {
+    if rotation == {
+        case 2; convert_pixels_impl(dst, dst_w, src, src_w, src_h, 2, is_10bit);
+        case 3; convert_pixels_impl(dst, dst_w, src, src_w, src_h, 3, is_10bit);
+        case 4; convert_pixels_impl(dst, dst_w, src, src_w, src_h, 4, is_10bit);
+        case;   convert_pixels_impl(dst, dst_w, src, src_w, src_h, 0, is_10bit);
+    }
+}
+
+convert_pixels :: (dst: *u32, dst_w: u32, src: *u32, src_w: u32, src_h: u32, rotation: u32, is_10bit: bool) {
+    if is_10bit  convert_pixels_rotation(dst, dst_w, src, src_w, src_h, rotation, true);
+    else         convert_pixels_rotation(dst, dst_w, src, src_w, src_h, rotation, false);
 }
 
 nv_capture_all_monitors :: (nv: *Nv_Capture, device: *ID3D11Device) -> bool {

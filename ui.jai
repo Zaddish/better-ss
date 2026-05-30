@@ -620,7 +620,6 @@ ui_defer_label :: (r: *Betterss_Renderer, px: float, py: float, pw: float, ph: f
 
 ui_render_deferred_labels :: (r: *Betterss_Renderer) {
     if ui_deferred_label_count == 0 return;
-    if !r.vertex_shader || !r.overlay_shader || !r.alpha_blend return;
 
     for i: 0 .. ui_deferred_label_count - 1 {
         dl := *ui_deferred_labels[i];

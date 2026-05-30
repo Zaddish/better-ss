@@ -1,5 +1,9 @@
-MAX_ANNOTATIONS     :: 128;
-MAX_POINTS_PER_LINE :: 16384;
+MAX_ANNOTATIONS  :: 128;
+// one shared point budget for every stroke this capture
+// a single stroke can use as many as it wants; the only bound is the sum
+// 256k points is like 1Mpx of travel at the 4px min spacing
+// if u need more than this wtf are you doing bruz
+MAX_TOTAL_POINTS :: 1 << 18;
 
 Annotation_Type :: enum u32 #specified { LINE :: 0; RECT :: 1; HIGHLIGHT :: 2; }
 Annotation_Mode :: enum u32 #specified { LINE :: 0; HIGHLIGHT :: 1; CENSOR :: 2; }
@@ -27,6 +31,8 @@ Selection_State :: struct {
     annotations:      *Annotation_Entry;
     annotation_count: s32;
     point_storage:    *Line_Point;
+    point_capacity:   s32;
+    point_cursor:     s32;   // next free point in the pool
     is_annotating:    bool;
 
     is_censoring:   bool;
@@ -88,24 +94,31 @@ selection_set_rect :: (s: *Selection_State, r: RECT) {
 }
 
 annotation_init :: (s: *Selection_State, allocator: Allocator) {
-    s.annotations   = cast(*Annotation_Entry) alloc(size_of(Annotation_Entry) * MAX_ANNOTATIONS,, allocator);
-    s.point_storage = cast(*Line_Point)       alloc(size_of(Line_Point) * MAX_ANNOTATIONS * MAX_POINTS_PER_LINE,, allocator);
+    s.annotations    = cast(*Annotation_Entry) alloc(size_of(Annotation_Entry) * MAX_ANNOTATIONS,, allocator);
+    s.point_storage  = cast(*Line_Point)       alloc(size_of(Line_Point) * MAX_TOTAL_POINTS,, allocator);
+    s.point_capacity = MAX_TOTAL_POINTS;
+    s.point_cursor   = 0;
     if !s.annotations || !s.point_storage {
-        s.annotations   = null;
-        s.point_storage = null;
+        s.annotations    = null;
+        s.point_storage  = null;
+        s.point_capacity = 0;
     }
 }
 
 annotation_begin :: (s: *Selection_State, x: s32, y: s32, type: Annotation_Type) {
     if !s.annotations || !s.point_storage return;
     if s.annotation_count >= MAX_ANNOTATIONS return;
+    if s.point_cursor >= s.point_capacity return;
 
     entry := *s.annotations[s.annotation_count];
     entry.type        = type;
-    entry.points.data  = s.point_storage + s.annotation_count * MAX_POINTS_PER_LINE;
-    entry.points.count = MAX_POINTS_PER_LINE;
+    // this stroke starts at the cursor and streams forward; it is always the last
+    // allocation in the pool while it is being drawn, so appends just bump the cursor
+    entry.points.data  = s.point_storage + s.point_cursor;
+    entry.points.count = 1;
     entry.point_count  = 1;
     entry.points.data[0] = .{x, y};
+    s.point_cursor += 1;
     entry.x0 = 0; entry.y0 = 0; entry.x1 = 0; entry.y1 = 0;
     entry.color      = panel_state.color;
     entry.line_width = panel_state.width;
@@ -159,9 +172,11 @@ annotation_update :: (s: *Selection_State, x: s32, y: s32) {
         if pdx * pdx + pdy * pdy < min_dist return;
     }
 
-    if entry.point_count >= MAX_POINTS_PER_LINE return;
+    if s.point_cursor >= s.point_capacity return;
     entry.points.data[entry.point_count] = .{sx, sy};
-    entry.point_count += 1;
+    entry.point_count  += 1;
+    entry.points.count  = entry.point_count;
+    s.point_cursor     += 1;
 }
 
 annotation_end :: (s: *Selection_State) {
@@ -171,9 +186,14 @@ annotation_end :: (s: *Selection_State) {
 }
 
 annotation_undo :: (s: *Selection_State) {
-    // memory stays in the arena
-    //will be reset when capture ends
-    if s.annotation_count > 0 s.annotation_count -= 1;
+    if s.annotation_count > 0 {
+        s.annotation_count -= 1;
+        // rewind the pool cursor over the points this stroke streamed in, so the
+        // space is immediately reusable    
+        //
+        // NOTE(zaddish): rects stream no points, so this is 0
+        s.point_cursor -= s.annotations[s.annotation_count].point_count;
+    }
 }
 
 censor_begin :: (s: *Selection_State, x: s32, y: s32) {

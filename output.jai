@@ -175,7 +175,7 @@ save_pixels_to_file :: (factory: *IWICImagingFactory, pixels: *u8, width: u32, h
 
 acquire_selection_pixels :: (r: *Betterss_Renderer, selection_rect: RECT, s: *Selection_State) -> Output_Pixels {
     result: Output_Pixels;
-    if !r || !r.device || !r.ctx return result;
+    if !r.ready return result;
     if !r.cached_background.texture return result;
 
     sel_w := selection_rect.right  - selection_rect.left;

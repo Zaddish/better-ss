@@ -271,7 +271,7 @@ main :: () {
 
     renderer = acquire_renderer(overlay_window);
     if !renderer_is_valid(*renderer) fatal_startup("D3D11 device creation failed. No hardware or WARP device available.");
-    initialize_shaders(*renderer);
+    if !initialize_shaders(*renderer) fatal_startup("D3D11 resource creation failed.");
 
     create_tray_icon(instance);
 
@@ -849,7 +849,7 @@ show_overlay :: () {
     if !renderer.device {
         renderer = acquire_renderer(overlay_window);
         if !renderer_is_valid(*renderer) return;
-        initialize_shaders(*renderer);
+        if !initialize_shaders(*renderer) return;
         release_duplications(*capture);
     } else if !renderer.swap_chain {
         if !acquire_swap_chain_for_renderer(*renderer, overlay_window) return;
@@ -936,19 +936,18 @@ hide_overlay :: () {
     selection_reset(*selection);
     release_swap_chain(*renderer);
 
-    release_cached_texture(*renderer.cached_background);
-    release_cached_texture(*renderer.cached_render);
-    release_cached_texture(*renderer.cached_staging);
-    release_cached_texture(*renderer.highlight_texture);
-    release_cached_texture(*renderer.scene_copy);
+    release_session_textures(*renderer);
 
     SetCursor(cursor_arrow);
     is_capturing = false;
 }
 
 render_overlay :: () -> bool {
-    if !renderer.ctx || !renderer.render_target return false;
-    if !renderer.cached_background.srv || !renderer.vertex_shader || !renderer.overlay_shader return false;
+    // 1 precondition for the whole frame: device resources are up (ready), the
+    // swap chain has a render target, and the capture produced a background. 
+    // the rest of the pipeline after this makes sure it cant do anything dumb
+    // now i dont have to keep rechecking each handle
+    if !renderer.ready || !renderer.render_target || !renderer.cached_background.srv return false;
 
     ID3D11DeviceContext_OMSetRenderTargets(renderer.ctx, 1, *renderer.render_target, null);
 
